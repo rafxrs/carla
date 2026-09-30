@@ -9,7 +9,7 @@ Insert instructions for cloning, setting up and running the code
 
 ## Contribute
 
-Starting Jan 2027, contributions are welcome -- If you want to contribute to the project, fork the repository and submit a PR.
+Starting Jan 2027, contributions are welcome - If you want to contribute to the project, fork the repository and submit a PR.
 
 ## References
 
