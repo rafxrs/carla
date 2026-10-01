@@ -1,6 +1,6 @@
 # CARLA - Catan Advanced Reinforcement Learning Agent
 
-A powerful, built-from-scratch Deep RL catan agent. 
+A powerful Deep RL catan agent. 
 All code (game engine, RL, GUI, tests, etc.) was written from scratch and is intellectual property of Rafael Reis, Lucas Bessai, Suraj Vadulas and Dan Suissa.
 
 ## Setup
