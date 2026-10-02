@@ -73,12 +73,12 @@ class Action(NamedTuple):
     def to_json(self) -> dict[str, Any]:
         """Compact JSON form: the type name plus the fields in use."""
         out: dict[str, Any] = {"type": self.type.name}
-        for name, value in zip(self._fields[1:], self[1:], strict=True):
-            if name == "trade":
-                if value is not None:
-                    out["trade"] = {"give": list(value.give), "receive": list(value.receive)}
-            elif value != -1:
+        for name in self._fields[1:-1]:
+            value = getattr(self, name)
+            if value != -1:
                 out[name] = value
+        if self.trade is not None:
+            out["trade"] = {"give": list(self.trade.give), "receive": list(self.trade.receive)}
         return out
 
     @classmethod

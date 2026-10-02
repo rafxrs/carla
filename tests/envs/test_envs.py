@@ -23,7 +23,7 @@ from carla.envs.action_space import HEAD_INDEX, HEAD_SIZES, heads_used
 def all_mask_decisions(masks, actor):
     """Every action the masks allow, by brute force over the heads each type uses."""
     out = set()
-    for t in np.flatnonzero(masks["type"]):
+    for t in np.flatnonzero(masks["type"]).tolist():
         for dev in range(5) if heads_used(t, 0) == ("dev",) else [-1]:
             free = [h for h in heads_used(t, dev) if h != "dev"]
             for values in itertools.product(*(range(HEAD_SIZES[h]) for h in free)):

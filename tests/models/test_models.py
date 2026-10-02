@@ -105,4 +105,4 @@ def test_observation_batch_dtypes():
     encoder = ObservationEncoder()
     game = Game(seed=0)
     batch = batch_observations([encoder.encode(game, 0)])
-    assert batch["corners"].dtype == torch.float32 and batch["masks"]["type"].dtype == torch.bool
+    assert batch["corners"].dtype == torch.float32 and batch["masks"]["type"].dtype  # type: ignore[index] == torch.bool

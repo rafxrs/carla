@@ -11,7 +11,7 @@ import json
 import types
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any, Literal, TypeVar, Union, get_args, get_origin, get_type_hints
+from typing import Any, Literal, TypeVar, Union, cast, get_args, get_origin, get_type_hints
 
 import yaml
 
@@ -43,7 +43,7 @@ def from_dict(cls: type[T], data: Mapping[str, Any], where: str = "") -> T:
     if not isinstance(data, Mapping):
         raise ConfigError(f"{where or 'config'}: expected a mapping, got {data!r}")
     hints = get_type_hints(cls)
-    names = {f.name for f in dataclasses.fields(cls)}
+    names = {f.name for f in dataclasses.fields(cast(Any, cls))}
     unknown = set(data) - names
     if unknown:
         raise ConfigError(f"{where or 'config'}: unknown keys {sorted(unknown)}")
@@ -106,7 +106,7 @@ def _set_dotted(data: dict[str, Any], key: str, value: Any) -> None:
 def _coerce(tp: Any, value: Any, where: str) -> Any:
     origin, args = get_origin(tp), get_args(tp)
     if dataclasses.is_dataclass(tp):
-        return from_dict(tp, value, where)
+        return from_dict(cast(Any, tp), value, where)
     if origin is Literal:
         if value not in args:
             raise ConfigError(f"{where}: {value!r} is not one of {list(args)}")

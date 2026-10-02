@@ -8,7 +8,7 @@ from carla.eval.runner import play_game
 def test_registry():
     assert {"random", "heuristic"} <= set(AGENTS)
     agent = make_agent("random_flat")
-    assert agent.name == "random_flat" and not agent.by_type
+    assert isinstance(agent, RandomAgent) and agent.name == "random_flat" and not agent.by_type
     with pytest.raises(ValueError, match="unknown agent"):
         make_agent("alphazero")
 

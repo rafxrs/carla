@@ -72,7 +72,7 @@ def _simulate(args) -> int:
         steps += result.steps
         winner = "none" if result.winner is None else f"P{result.winner} ({result.winner_name})"
         print(f"game {i}: seed {seed} winner {winner} turns {result.turns} steps {result.steps}")
-        if args.save:
+        if args.save and result.record is not None:
             result.record.save(args.save / f"game_{i:04d}.json.gz")
             result.record.save_text(args.save / f"game_{i:04d}.txt")
     elapsed = time.perf_counter() - start

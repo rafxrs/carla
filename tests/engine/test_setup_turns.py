@@ -77,6 +77,7 @@ def test_turns_rotate():
 def test_max_turns_truncates_without_winner():
     game = Game(EngineConfig(max_turns=6), seed=0)
     finish_setup(game)
+    events = []
     for _ in range(6):
         game.step(A.ROLL, outcome=(2, 3))
         events = game.step(A.END_TURN)

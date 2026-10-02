@@ -222,7 +222,7 @@ def _main_actions(s: GameState, p: int) -> list[Action]:
     for give in _RESOURCES:
         if hand[give] >= ratios[give]:
             row = A.MARITIME[give]
-            out.extend(row[r] for r in _RESOURCES if r != give and bank[r])
+            out.extend(a for r in _RESOURCES if bank[r] and (a := row[r]) is not None)
     return out
 
 

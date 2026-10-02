@@ -89,3 +89,8 @@ pythonpath = ["src"]
 addopts = "-ra --strict-markers"
 markers = ["slow: long-running tests (deselect with -m 'not slow')"]
 filterwarnings = ["error::DeprecationWarning:carla.*"]
+
+[tool.pyright]
+include = ["src", "tests", "scripts"]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
