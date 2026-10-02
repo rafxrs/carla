@@ -1,35 +1,36 @@
 # CARLA - Catan Advanced Reinforcement Learning Agent
 
-A powerful Deep RL catan agent. 
+A powerful Deep RL catan agent.
 All code (game engine, RL, GUI, tests, etc.) was written from scratch and is intellectual property of Rafael Reis, Lucas Bessai, Suraj Vadulas and Dan Suissa.
 
 CARLA learns full 4-player Settlers of Catan by self-play PPO on top of its own deterministic rules engine (ECSE 552 course project, McGill).
 
 ## Status
 
-| Module | Workstream | State |
-|---|---|---|
-| `engine/` | engine | **Done, tested.** Full base rules: setup, production with bank shortage, discards and robber, building, maritime trade, all development cards, Longest Road with cuts, Largest Army, victory. Also legal-action enumeration, snapshot/restore, seeded replay, JSON and text logs. Domestic trade: interface only. |
-| `config/` | shared | **Done.** Typed dataclasses, YAML `extends`, dotted overrides, strict validation. |
-| `envs/` | RL | **Working v0.** Factored action heads and masks, observation encoder, rewards, self-play env, Gymnasium env. |
-| `agents/` | eval/bots | **Working v0.** Random bot and greedy heuristic bot (wins 100% against random). |
-| `eval/` | eval/bots | **Working.** Seeded tournaments with seat rotation and Wilson CIs, multi-process. Plots and trade metrics: TODO. |
-| `models/` | models | Masked factored distribution and MLP baseline **done**. GNN, set attention, belief module, trade decoder: **interfaces + TODOs**. |
-| `rl/` | RL | GAE, rollout collection, checkpoints, `carla train` dry run **done**. PPO update, async workers, opponent pool: **interfaces + TODOs**. |
-| `gui/` | GUI | Stub (Arcade). |
+| Module    | Workstream | State                                                                                                                                                                                                                                                                                                             |
+| --------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `engine/` | engine     | **Done, tested.** Full base rules: setup, production with bank shortage, discards and robber, building, maritime trade, all development cards, Longest Road with cuts, Largest Army, victory. Also legal-action enumeration, snapshot/restore, seeded replay, JSON and text logs. Domestic trade: interface only. |
+| `config/` | shared     | **Done.** Typed dataclasses, YAML `extends`, dotted overrides, strict validation.                                                                                                                                                                                                                                 |
+| `envs/`   | RL         | **Working v0.** Factored action heads and masks, observation encoder, rewards, self-play env, Gymnasium env.                                                                                                                                                                                                      |
+| `agents/` | eval/bots  | **Working v0.** Random bot and greedy heuristic bot (wins 100% against random).                                                                                                                                                                                                                                   |
+| `eval/`   | eval/bots  | **Working.** Seeded tournaments with seat rotation and Wilson CIs, multi-process. Plots and trade metrics: TODO.                                                                                                                                                                                                  |
+| `models/` | models     | Masked factored distribution and MLP baseline **done**. GNN, set attention, belief module, trade decoder: **interfaces + TODOs**.                                                                                                                                                                                 |
+| `rl/`     | RL         | GAE, rollout collection, checkpoints, `carla train` dry run **done**. PPO update, async workers, opponent pool: **interfaces + TODOs**.                                                                                                                                                                           |
+| `gui/`    | GUI        | Stub (Arcade).                                                                                                                                                                                                                                                                                                    |
 
 ## Setup
 
 Python 3.11+. With [uv](https://docs.astral.sh/uv/) (recommended):
 
 ```bash
-uv sync --extra cpu --extra dev     # laptops and the Slurm cluster (CPU-only torch)
-uv sync --extra cu130 --extra dev   # RTX 50xx workstation (CUDA 13 torch, NVIDIA driver >= 580)
-source .venv/bin/activate           # or prefix commands with `uv run`
+pip install uv
+uv sync --extra cpu --extra dev     # or --extra cu130 for the RTX 50xx workstation
+source .venv/bin/activate           # Linux/macOS (or prefix commands with `uv run`)
+.venv\Scripts\Activate.ps1          # Windows PowerShell
 pre-commit install                  # ruff + black on every commit
 ```
 
-Commit the `uv.lock` created by the first `uv sync`, so everyone runs identical versions. Plain pip also works: install torch from pytorch.org, then run `pip install -e ".[dev]"`. Add the `gui` extra for Arcade.
+Commit the `uv.lock` created by the first `uv sync`, so everyone runs identical versions. Plain pip + venv or pip + conda also works: install torch from pytorch.org, then run `pip install -e ".[dev]"`. Add the `gui` extra for Arcade.
 
 ## Commands
 
@@ -162,6 +163,7 @@ Starting Jan 2027, contributions are welcome - If you want to contribute to the 
 ## References
 
 Our learning was shaped and influenced by the brilliant contributions to the field of DRL, and Catan AIs:
+
 - [Settlers RL](https://settlers-rl.github.io/)
-- 
-- 
+-
+-
