@@ -16,6 +16,7 @@ class EngineConfig:
     allow_domestic_trade: bool = False
     """Player-to-player trading. Not implemented yet: True raises NotImplementedError."""
     max_trade_proposals_per_turn: int = 3
+    """Domestic trade (reserved): proposals the current player may make per turn."""
     board_seed: int | None = None
     """Use the same board in every game (generated from this seed) instead of one per game seed."""
     forbid_adjacent_red_numbers: bool = True
