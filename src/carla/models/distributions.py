@@ -37,11 +37,12 @@ class FactoredDistribution:
         self.logp: dict[str, Tensor] = {}
         for key, shape in MASK_SHAPES.items():
             flat_logits = logits[key].reshape(self.batch, -1)
+            if flat_logits.shape[1] != _numel(shape):
+                raise ValueError(f"logits[{key!r}] must have shape (batch, *{shape})")
             mask = masks[key].reshape(self.batch, -1).bool()
             # Unavailable sub-decisions get a dummy uniform mask: their probability is 0 anyway.
             mask = mask | ~mask.any(dim=1, keepdim=True)
             self.logp[key] = torch.log_softmax(flat_logits.masked_fill(~mask, -torch.inf), dim=1)
-            assert self.logp[key].shape[1] == _numel(shape)
 
     def sample(self, deterministic: bool = False) -> Tensor:
         picks = {
