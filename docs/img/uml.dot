@@ -1,0 +1,149 @@
+digraph CARLA {
+  graph [rankdir=BT, fontname="Helvetica", fontsize=13, nodesep=0.35, ranksep=0.7, bgcolor="white",
+         label="CARLA - UML class diagram (main classes, branch setup)", labelloc=t];
+  node  [shape=plain, fontname="Helvetica", fontsize=10];
+  edge  [fontname="Helvetica", fontsize=9, color="#5F6B76"];
+
+  subgraph cluster_engine {
+    label="carla.engine (stdlib only)"; style="rounded,filled"; fillcolor="#FBEDEA"; color="#C8553D";
+    Game [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white">
+      <tr><td bgcolor="#C8553D"><font color="white"><b>Game</b></font></td></tr>
+      <tr><td align="left">seed: int<br align="left"/>state: GameState<br align="left"/>rng: Rng<br align="left"/>history: list[Step]<br align="left"/></td></tr>
+      <tr><td align="left">legal_actions() : tuple[Action]<br align="left"/>step(action, outcome) : list[Event]<br align="left"/>snapshot() / restore() / clone()<br align="left"/>to_dict() / from_dict() / state_hash()<br align="left"/></td></tr></table>>];
+    GameState [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white">
+      <tr><td bgcolor="#C8553D"><font color="white"><b>GameState</b></font></td></tr>
+      <tr><td align="left">phase: Phase<br align="left"/>current_player, decision_player<br align="left"/>corner_owner, edge_owner, hands, bank<br align="left"/>dev_deck, dev_hands, road_lengths ...<br align="left"/></td></tr>
+      <tr><td align="left">copy() / to_dict() / from_dict()<br align="left"/></td></tr></table>>];
+    Board [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white">
+      <tr><td bgcolor="#C8553D"><font color="white"><b>Board</b> (frozen)</font></td></tr>
+      <tr><td align="left">tile_resource, tile_number, port_types<br align="left"/></td></tr>
+      <tr><td align="left">random(rng) / describe_corner()<br align="left"/></td></tr></table>>];
+    EngineConfig [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white">
+      <tr><td bgcolor="#C8553D"><font color="white"><b>EngineConfig</b></font></td></tr>
+      <tr><td align="left">vp_to_win, max_turns<br align="left"/>allow_domestic_trade ...<br align="left"/></td></tr></table>>];
+    Action [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white">
+      <tr><td bgcolor="#C8553D"><font color="white"><b>Action</b> (NamedTuple)</font></td></tr>
+      <tr><td align="left">type: ActionType<br align="left"/>corner, edge, tile, player<br align="left"/>dev, resource, resource2, trade<br align="left"/></td></tr></table>>];
+    Event [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white">
+      <tr><td bgcolor="#C8553D"><font color="white"><b>Event</b> (NamedTuple)</font></td></tr>
+      <tr><td align="left">kind, player, target, value, location, counts<br align="left"/></td></tr>
+      <tr><td align="left">visible_to(seat)<br align="left"/></td></tr></table>>];
+    GameRecord [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white">
+      <tr><td bgcolor="#C8553D"><font color="white"><b>GameRecord</b></font></td></tr>
+      <tr><td align="left">seed, config, board, steps, hashes<br align="left"/></td></tr>
+      <tr><td align="left">from_game() / save() / load()<br align="left"/>replay(k) : Game / to_text()<br align="left"/></td></tr></table>>];
+    Rng [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white">
+      <tr><td bgcolor="#C8553D"><font color="white"><b>Rng</b></font></td></tr>
+      <tr><td align="left">randint() / weighted_index()<br align="left"/>getstate() / setstate()<br align="left"/></td></tr></table>>];
+    rules [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white">
+      <tr><td bgcolor="#C8553D"><font color="white"><b>«module» rules</b></font></td></tr>
+      <tr><td align="left">legal_actions(state)<br align="left"/>apply_action(state, action, rng)<br align="left"/>victory_points / longest_road_length<br align="left"/></td></tr></table>>];
+  }
+
+  subgraph cluster_agents {
+    label="carla.agents"; style="rounded,filled"; fillcolor="#E8F3EE"; color="#2E7D5B";
+    Agent [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white">
+      <tr><td bgcolor="#2E7D5B"><font color="white"><b><i>Agent</i></b> (abstract)</font></td></tr>
+      <tr><td align="left">reset(game, seat, seed)<br align="left"/><i>act(game, seat, legal) : Action</i><br align="left"/></td></tr></table>>];
+    RandomAgent [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white"><tr><td bgcolor="#2E7D5B"><font color="white"><b>RandomAgent</b></font></td></tr></table>>];
+    HeuristicAgent [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white"><tr><td bgcolor="#2E7D5B"><font color="white"><b>HeuristicAgent</b></font></td></tr></table>>];
+    HumanAgent [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white"><tr><td bgcolor="#5F6B76"><font color="white"><b>HumanAgent</b> (gui, stub)</font></td></tr></table>>];
+  }
+
+  subgraph cluster_eval {
+    label="carla.eval"; style="rounded,filled"; fillcolor="#E8F3EE"; color="#2E7D5B";
+    tournament [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white">
+      <tr><td bgcolor="#2E7D5B"><font color="white"><b>«module» tournament</b></font></td></tr>
+      <tr><td align="left">run_tournament() : TournamentResult<br align="left"/>play_game() : GameResult<br align="left"/>wilson_interval()<br align="left"/></td></tr></table>>];
+  }
+
+  subgraph cluster_envs {
+    label="carla.envs"; style="rounded,filled"; fillcolor="#E6EFF6"; color="#2F6F9F";
+    CatanEnv [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white">
+      <tr><td bgcolor="#2F6F9F"><font color="white"><b>CatanEnv</b> (gymnasium.Env)</font></td></tr>
+      <tr><td align="left">reset(seed) / step(heads)<br align="left"/></td></tr></table>>];
+    CatanAECEnv [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white">
+      <tr><td bgcolor="#2F6F9F"><font color="white"><b>CatanAECEnv</b></font></td></tr>
+      <tr><td align="left">reset() / observe() / step() : AECStep<br align="left"/>hidden_truth(seat)<br align="left"/></td></tr></table>>];
+    ObservationEncoder [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white">
+      <tr><td bgcolor="#2F6F9F"><font color="white"><b>ObservationEncoder</b></font></td></tr>
+      <tr><td align="left">encode(game, seat, events) : dict<br align="left"/></td></tr></table>>];
+    action_space [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white">
+      <tr><td bgcolor="#2F6F9F"><font color="white"><b>«module» action_space</b></font></td></tr>
+      <tr><td align="left">build_masks() / encode_action()<br align="left"/>decode_action() / sample_heads()<br align="left"/></td></tr></table>>];
+  }
+
+  subgraph cluster_models {
+    label="carla.models (torch)"; style="rounded,filled"; fillcolor="#F6EEDF"; color="#B7791F";
+    PolicyNetwork [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white">
+      <tr><td bgcolor="#B7791F"><font color="white"><b><i>PolicyNetwork</i></b> (nn.Module)</font></td></tr>
+      <tr><td align="left">forward(obs, state) : PolicyOutput<br align="left"/></td></tr></table>>];
+    MLPPolicy [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white"><tr><td bgcolor="#B7791F"><font color="white"><b>MLPPolicy</b></font></td></tr></table>>];
+    GNNPolicy [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white"><tr><td bgcolor="#D9BD8C"><b>GNNPolicy</b> (stub)</td></tr></table>>];
+    PolicyOutput [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white">
+      <tr><td bgcolor="#B7791F"><font color="white"><b>PolicyOutput</b></font></td></tr>
+      <tr><td align="left">logits, value, state, belief<br align="left"/></td></tr></table>>];
+    FactoredDistribution [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white">
+      <tr><td bgcolor="#B7791F"><font color="white"><b>FactoredDistribution</b></font></td></tr>
+      <tr><td align="left">sample() / log_prob() / entropy()<br align="left"/></td></tr></table>>];
+    stubs [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white"><tr><td bgcolor="#D9BD8C"><b>BeliefModule · SetAttentionPool · TradeDecoder</b> (stubs)</td></tr></table>>];
+  }
+
+  subgraph cluster_rl {
+    label="carla.rl (torch)"; style="rounded,filled"; fillcolor="#E6EFF6"; color="#2F6F9F";
+    PPOLearner [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white"><tr><td bgcolor="#9DB9D2"><b>PPOLearner</b> (stub)</td></tr><tr><td align="left">update(batches)<br align="left"/></td></tr></table>>];
+    RolloutWorker [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white"><tr><td bgcolor="#9DB9D2"><b>RolloutWorker</b> (stub)</td></tr></table>>];
+    OpponentPool [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white"><tr><td bgcolor="#9DB9D2"><b>OpponentPool</b> (stub)</td></tr></table>>];
+    RolloutBatch [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white"><tr><td bgcolor="#2F6F9F"><font color="white"><b>RolloutBatch</b></font></td></tr><tr><td align="left">obs, actions, log_probs, values, rewards, dones<br align="left"/></td></tr></table>>];
+    train [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white"><tr><td bgcolor="#2F6F9F"><font color="white"><b>«module» train</b></font></td></tr><tr><td align="left">train(config) · collect_rollout · compute_gae<br align="left"/></td></tr></table>>];
+  }
+
+  subgraph cluster_config {
+    label="carla.config"; style="rounded,filled"; fillcolor="#EEEBF5"; color="#6B5B95";
+    ExperimentConfig [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="white">
+      <tr><td bgcolor="#6B5B95"><font color="white"><b>ExperimentConfig</b></font></td></tr>
+      <tr><td align="left">engine, env, model, ppo<br align="left"/>opponents, eval, runtime<br align="left"/></td></tr>
+      <tr><td align="left">load_config(yaml, overrides)<br align="left"/></td></tr></table>>];
+  }
+
+  // composition / association (solid), inheritance (empty arrow), dependency (dashed)
+  GameState -> Board  [arrowhead=vee, label="board"];
+  GameState -> EngineConfig [arrowhead=vee, label="config"];
+  Game -> GameState [arrowhead=diamond, label="state"];
+  Game -> Rng [arrowhead=diamond];
+  Game -> rules [arrowhead=vee, style=dashed, label="uses"];
+  rules -> Action [arrowhead=vee, style=dashed];
+  rules -> Event [arrowhead=vee, style=dashed];
+  GameRecord -> Game [arrowhead=vee, style=dashed, label="replays"];
+
+  RandomAgent -> Agent [arrowhead=empty];
+  HeuristicAgent -> Agent [arrowhead=empty];
+  HumanAgent -> Agent [arrowhead=empty];
+  Agent -> Game [arrowhead=vee, style=dashed, label="reads"];
+  tournament -> Agent [arrowhead=vee, style=dashed];
+  tournament -> GameRecord [arrowhead=vee, style=dashed];
+
+  CatanEnv -> CatanAECEnv [arrowhead=diamond, label="aec"];
+  CatanEnv -> Agent [arrowhead=vee, label="3 opponents"];
+  CatanAECEnv -> Game [arrowhead=diamond, label="game"];
+  CatanAECEnv -> ObservationEncoder [arrowhead=diamond];
+  ObservationEncoder -> action_space [arrowhead=vee, style=dashed];
+  CatanAECEnv -> ExperimentConfig [arrowhead=vee, style=dashed, label="EnvConfig"];
+
+  MLPPolicy -> PolicyNetwork [arrowhead=empty];
+  GNNPolicy -> PolicyNetwork [arrowhead=empty];
+  PolicyNetwork -> PolicyOutput [arrowhead=vee, style=dashed, label="returns"];
+  PolicyOutput -> FactoredDistribution [arrowhead=vee, style=dashed];
+  FactoredDistribution -> action_space [arrowhead=vee, style=dashed, label="masks"];
+  stubs -> PolicyNetwork [arrowhead=vee, style=dashed, label="plug into"];
+
+  PPOLearner -> PolicyNetwork [arrowhead=diamond, label="policy"];
+  PPOLearner -> RolloutBatch [arrowhead=vee, style=dashed];
+  RolloutWorker -> CatanAECEnv [arrowhead=vee];
+  RolloutWorker -> OpponentPool [arrowhead=vee];
+  RolloutWorker -> RolloutBatch [arrowhead=vee, style=dashed, label="produces"];
+  OpponentPool -> Agent [arrowhead=vee, style=dashed];
+  train -> CatanEnv [arrowhead=vee, style=dashed];
+  train -> PolicyNetwork [arrowhead=vee, style=dashed];
+  train -> ExperimentConfig [arrowhead=vee, style=dashed];
+}

@@ -84,6 +84,10 @@ flowchart BT
     gui --> agents
 ```
 
+Class diagram of the main classes (source: `docs/img/uml.dot`, re-render with `dot -Tsvg docs/img/uml.dot -o docs/img/uml.svg`):
+
+![UML class diagram](docs/img/uml.svg)
+
 Three contracts connect the workstreams:
 
 1. **Observations**: `envs/observation.py` lists the arrays. Seats are relative (0 = the actor), and there are no board coordinates.
