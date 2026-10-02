@@ -1,0 +1,14 @@
+# Settings shared by every experiment. Fields not listed keep the defaults in
+# src/carla/config/schema.py; `carla config <file>` prints the fully resolved config.
+name: base
+seed: 0
+engine:
+  max_turns: 500          # truncate stalled self-play games
+model:
+  hidden_dim: 256
+ppo:
+  total_env_steps: 50000000
+  learning_rate: 3.0e-4
+runtime:
+  num_workers: 8
+  envs_per_worker: 4

@@ -1,0 +1,5 @@
+# Control condition: flat features, no structural bias.
+extends: ../base.yaml
+name: mlp
+model:
+  encoder: mlp

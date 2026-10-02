@@ -1,0 +1,4 @@
+extends: gnn_attention.yaml
+name: gnn_attention_belief
+model:
+  belief: gru

@@ -1,0 +1,16 @@
+# Seconds-long end-to-end check (`carla train configs/smoke.yaml`).
+extends: base.yaml
+name: smoke
+engine:
+  max_turns: 60
+ppo:
+  total_env_steps: 2048
+  rollout_steps: 64
+  minibatch_size: 128
+runtime:
+  num_workers: 1
+  envs_per_worker: 1
+  output_dir: runs/smoke
+eval:
+  num_games: 8
+  seeds: [0]
