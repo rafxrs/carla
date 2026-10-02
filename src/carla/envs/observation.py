@@ -176,6 +176,7 @@ class ObservationEncoder:
                 if kind >= 0:
                     ports[c, kind] = 1.0
             self._static_board, self._static = board, (tiles, ports)
+        assert self._static is not None
         return self._static
 
     def _encode_events(

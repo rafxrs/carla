@@ -24,6 +24,7 @@ PROPOSE_TRADE is produced by the trade decoder (`carla.models.trade_decoder`), n
 """
 
 from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -130,7 +131,7 @@ def sample_heads(masks: Mapping[str, np.ndarray], rng: np.random.Generator) -> n
     (model-side samplers must condition the heads exactly like this)."""
     heads = np.full(len(HEAD_NAMES), -1, dtype=np.int64)
 
-    def pick(head: str, mask: np.ndarray) -> int:
+    def pick(head: str, mask: Any) -> int:
         heads[HEAD_INDEX[head]] = value = int(rng.choice(np.flatnonzero(mask)))
         return value
 
@@ -173,7 +174,7 @@ def encode_action(action: Action, actor: int) -> np.ndarray:
     return heads
 
 
-def decode_action(heads: Sequence[int] | Mapping[str, int], actor: int) -> Action:
+def decode_action(heads: Sequence[int] | np.ndarray | Mapping[str, int], actor: int) -> Action:
     """Inverse of `encode_action`; heads not used by the chosen type are ignored."""
     if isinstance(heads, Mapping):
         get = heads.__getitem__

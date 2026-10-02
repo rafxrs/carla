@@ -64,6 +64,7 @@ def run_tournament(
         results = [_play(job) for job in jobs]
     if records_dir is not None:
         for i, r in enumerate(results):
+            assert r.record is not None
             r.record.save(Path(records_dir) / f"game_{i:05d}_{r.seed}.json.gz")
     per_seed = {
         seed: summarize(results[i * num_games : (i + 1) * num_games], confidence)

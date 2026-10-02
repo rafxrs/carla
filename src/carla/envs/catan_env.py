@@ -10,7 +10,7 @@ in the env and played automatically between the learner's decisions.
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from typing import Any
 
 import gymnasium as gym
 import numpy as np
@@ -59,8 +59,14 @@ class CatanAECEnv:
         self.engine_config = engine_config or EngineConfig()
         self.config = env_config or EnvConfig()
         self.encoder = encoder or ObservationEncoder(self.config.max_events)
-        self.game: Game | None = None
+        self._game: Game | None = None
         self._pending: list[list[Event]] = [[] for _ in range(NUM_PLAYERS)]
+
+    @property
+    def game(self) -> Game:
+        if self._game is None:
+            raise RuntimeError("call reset() first")
+        return self._game
 
     @property
     def actor(self) -> int:
@@ -68,7 +74,7 @@ class CatanAECEnv:
 
     def reset(self, seed: int) -> int:
         """Start a new game; returns the first actor."""
-        self.game = Game(self.engine_config, seed)
+        self._game = Game(self.engine_config, seed)
         self._pending = [[] for _ in range(NUM_PLAYERS)]
         return self.actor
 
@@ -113,7 +119,7 @@ class CatanEnv(gym.Env):
     the learner's legal actions and `info["hidden_truth"]` the opponents' cards.
     """
 
-    metadata: ClassVar[dict] = {"render_modes": ["ansi"]}
+    metadata = {"render_modes": ["ansi"]}  # noqa: RUF012 (gymnasium API)
 
     def __init__(
         self,

@@ -115,7 +115,9 @@ def test_maritime_trade_default_ratio_is_four():
     assert maritime_options(game) == set()
     give(game, 0, (1, 0, 0, 0, 0))
     assert maritime_options(game) == {(0, r) for r in range(1, 5)}
-    game.step(A.MARITIME[0][4])
+    trade = A.MARITIME[0][4]
+    assert trade is not None
+    game.step(trade)
     assert game.state.hands[0] == [0, 0, 0, 0, 1]
     assert game.state.bank == [19, 19, 19, 19, 18]
 
