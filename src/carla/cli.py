@@ -41,8 +41,33 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("config", type=Path, nargs="?")
     p.add_argument("overrides", nargs="*")
 
-    p = commands.add_parser("gui", help="Arcade viewer (not implemented yet)")
-    p.add_argument("record", type=Path, nargs="?")
+    p = commands.add_parser("gui", help="play against bots, watch them, or replay a record")
+    p.add_argument("record", type=Path, nargs="?", help="game record (.json or .json.gz) to replay")
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("--play", action="store_true", help="play one seat against bots (default)")
+    mode.add_argument("--watch", action="store_true", help="watch a live game between bots")
+    p.add_argument("--seat", type=int, default=0, choices=range(4), help="your seat in --play")
+    p.add_argument(
+        "--opponents",
+        type=_agent_names,
+        default=(),
+        metavar="A,B,...",
+        help="bots for the other seats (all four with --watch), cycled "
+        "(default: heuristic; eval.agents with --watch)",
+    )
+    p.add_argument("--seed", type=int, help="config seed; game i uses derive_seed(seed, 'game', i)")
+    p.add_argument("--delay", type=float, default=0.6, help="seconds between bot moves at 1x")
+    p.add_argument(
+        "--config", type=Path, help="experiment config (engine rules, seed, eval.agents)"
+    )
+    p.add_argument(
+        "--set",
+        dest="overrides",
+        nargs="+",
+        default=[],
+        metavar="KEY=VALUE",
+        help="dotted config overrides, e.g. engine.vp_to_win=8",
+    )
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -132,10 +157,45 @@ def _config(args) -> int:
     return 0
 
 
+def _agent_names(text: str) -> tuple[str, ...]:
+    from carla.agents import AGENTS
+
+    names = tuple(name.strip() for name in text.split(",") if name.strip())
+    unknown = [name for name in names if name not in AGENTS]
+    if not names or unknown:
+        raise argparse.ArgumentTypeError(f"unknown agents {unknown}; known: {sorted(AGENTS)}")
+    return names
+
+
 def _gui(args) -> int:
+    from carla.gui.app import GuiOptions
     from carla.gui.app import main as gui_main
 
-    gui_main(str(args.record) if args.record else None)
+    if args.record is not None and (args.play or args.watch):
+        print(
+            "carla gui: a record is replayed; --play and --watch start new games", file=sys.stderr
+        )
+        return 2
+    if args.record is not None and not args.record.exists():
+        print(f"carla gui: no such record {args.record}", file=sys.stderr)
+        return 2
+    overrides = [*args.overrides, *([f"seed={args.seed}"] if args.seed is not None else [])]
+    config = load_config(args.config, overrides)
+    mode = "replay" if args.record is not None else "watch" if args.watch else "play"
+    options = GuiOptions(mode, args.record, args.seat, args.opponents, args.delay, config)
+    try:
+        gui_main(options)
+    except ImportError as exc:
+        if exc.name not in ("arcade", "pyglet"):
+            raise
+        print(
+            "carla gui needs Arcade: uv sync --extra gui (or pip install -e '.[gui]')",
+            file=sys.stderr,
+        )
+        return 1
+    except NotImplementedError as exc:  # e.g. engine.allow_domestic_trade=true
+        print(f"carla gui: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 

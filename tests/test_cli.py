@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 
 from carla.cli import main
@@ -56,3 +58,50 @@ def test_train_dry_run(tmp_path):
     assert main(["train", "configs/smoke.yaml", f"runtime.output_dir={tmp_path}"]) == 0
     (run,) = tmp_path.iterdir()
     assert {p.name for p in run.iterdir()} == {"config.yaml", "git.txt", "checkpoint_0.pt"}
+
+
+@pytest.fixture
+def gui_calls(monkeypatch):
+    import carla.gui.app
+
+    calls = []
+    monkeypatch.setattr(carla.gui.app, "main", calls.append)
+    return calls
+
+
+def test_gui_command_options(gui_calls, tmp_path):
+    args = ["gui", "--play", "--seat", "2", "--opponents", "heuristic, random", "--seed", "7"]
+    assert (
+        main([*args, "--delay", "0.2", "--set", "engine.vp_to_win=8", "runtime.output_dir=x"]) == 0
+    )
+    (options,) = gui_calls
+    assert (options.mode, options.seat, options.opponents) == ("play", 2, ("heuristic", "random"))
+    assert options.delay == 0.2 and options.record is None
+    assert options.config.seed == 7 and options.config.engine.vp_to_win == 8
+    assert options.config.runtime.output_dir == "x"
+    assert main(["gui", "--watch", "--config", "configs/bots.yaml"]) == 0
+    watch = gui_calls[-1]
+    assert watch.mode == "watch" and watch.opponents == ()
+    assert watch.config.eval.agents == ("heuristic", "random", "random", "random")
+    assert main(["gui"]) == 0 and gui_calls[-1].mode == "play"
+    record = tmp_path / "game.json"
+    record.write_text("{}", encoding="utf-8")
+    assert main(["gui", str(record)]) == 0
+    assert gui_calls[-1].mode == "replay" and gui_calls[-1].record == record
+
+
+def test_gui_command_errors(gui_calls, tmp_path, capsys, monkeypatch):
+    for bad in (["--opponents", "alphazero"], ["--opponents", ","], ["--seat", "4"]):
+        with pytest.raises(SystemExit):
+            main(["gui", *bad])
+    record = tmp_path / "game.json"
+    record.write_text("{}", encoding="utf-8")
+    assert main(["gui", str(record), "--watch"]) == 2
+    assert main(["gui", str(tmp_path / "missing.json")]) == 2
+    assert not gui_calls
+    monkeypatch.undo()  # the real GUI from here on, without letting it open a window
+    monkeypatch.setitem(sys.modules, "arcade", None)
+    assert main(["gui", "--watch"]) == 1
+    assert "needs Arcade" in capsys.readouterr().err
+    assert main(["gui", "--set", "engine.allow_domestic_trade=true"]) == 1
+    assert "domestic trade" in capsys.readouterr().err
