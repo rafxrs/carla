@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import random
 import sys
 import time
 from pathlib import Path
@@ -46,7 +47,13 @@ def main(argv: list[str] | None = None) -> int:
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--play", action="store_true", help="play one seat against bots (default)")
     mode.add_argument("--watch", action="store_true", help="watch a live game between bots")
-    p.add_argument("--seat", type=int, default=0, choices=range(4), help="your seat in --play")
+    p.add_argument(
+        "--seat",
+        type=int,
+        default=random.randint(0, 3),
+        choices=range(4),
+        help="your seat in --play",
+    )
     p.add_argument(
         "--opponents",
         type=_agent_names,
