@@ -13,6 +13,7 @@ from typing import Any
 from carla.agents.base import Agent
 from carla.engine.actions import Action, ActionType
 from carla.engine.config import EngineConfig
+from carla.engine.constants import NUM_PLAYERS
 from carla.engine.events import Event
 from carla.engine.game import Game, IllegalActionError, Snapshot
 from carla.engine.record import GameRecord
@@ -149,10 +150,11 @@ class GameSession:
         )
 
     def seat_names(self) -> list[str]:
+        """Agent name per seat ("You" for the human; empty when a record does not say)."""
         if self.agents is not None:
             return ["You" if isinstance(a, HumanAgent) else a.name for a in self.agents]
         names = self.record.metadata.get("agents")
-        return [str(n) for n in names] if names else ["?"] * 4
+        return [str(n) for n in names] if names else [""] * NUM_PLAYERS
 
     def last_dice(self) -> tuple[int, int] | None:
         """The most recent roll up to the position shown."""

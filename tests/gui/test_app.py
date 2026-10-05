@@ -208,6 +208,9 @@ def test_replay_mode(tmp_path):
     press(app, "end")
     app.on_update(0.05)
     assert app.session.at_end and not app.results  # recordings have no results dialog
+    winner = app.session.game.winner  # agents unknown: seats are just "P1"
+    assert app.session.seat_names() == [""] * 4
+    assert app.status()[1].startswith(f"Game over: P{winner} wins")
     press(app, "play_pause")
     press(app, "play_pause")  # playing from the end starts over
     assert app.session.position == 0 and app.pacer.playing

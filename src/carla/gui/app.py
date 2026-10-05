@@ -537,7 +537,7 @@ class GuiApp:
             elif winner == s.human_seat:
                 text = "You win!"
             else:
-                text = f"Game over: P{winner} ({names[winner]}) wins"
+                text = f"Game over: {_seat(winner, names)} wins"
             return badge, f"{text} · step {s.position}/{s.length}", theme.TEXT
         if not s.at_end:
             back = "End returns to the game" if s.live else "Space plays"
@@ -548,7 +548,7 @@ class GuiApp:
             return badge, "Paused · Space resumes", theme.TEXT_MUTED
         seat = game.decision_player
         doing = "is discarding" if game.phase == Phase.DISCARD else "is thinking…"
-        return badge, f"P{seat} ({names[seat]}) {doing}", theme.TEXT_MUTED
+        return badge, f"{_seat(seat, names)} {doing}", theme.TEXT_MUTED
 
     def frame(self) -> list[Layer]:
         """Everything to draw, back to front."""
@@ -624,7 +624,7 @@ class GuiApp:
             title, color = "No winner: turn limit reached", theme.TEXT
         else:
             you = winner == s.human_seat
-            title = "You win!" if you else f"P{winner} ({names[winner]}) wins"
+            title = "You win!" if you else f"{_seat(winner, names)} wins"
             color = theme.PLAYER[winner]
         layer.text(title, p.cx, p.top - 34, theme.FONT_TITLE + 4, color, True, "center", "center")
         detail = f"{game.turn} turns · {s.length} steps · seed {s.record.seed}"
@@ -724,6 +724,11 @@ def _flash_target(action: Action) -> tuple[str, int] | None:
     if t == ActionType.MOVE_ROBBER:
         return "tile", action.tile
     return None
+
+
+def _seat(seat: int, names: list[str]) -> str:
+    """ "P2 (heuristic)", or just "P2" when the agent is unknown."""
+    return f"P{seat} ({names[seat]})" if names[seat] else f"P{seat}"
 
 
 def _speed_text(speed: float) -> str:
