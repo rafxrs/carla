@@ -16,7 +16,7 @@ CARLA learns full 4-player Settlers of Catan by self-play PPO on top of its own 
 | `eval/`   | eval/bots  | **Working.** Seeded tournaments with seat rotation and Wilson CIs, multi-process. Plots and trade metrics: TODO.                                                                                                                                                                                                  |
 | `models/` | models     | Masked factored distribution and MLP baseline **done**. GNN, set attention, belief module, trade decoder: **interfaces + TODOs**.                                                                                                                                                                                 |
 | `rl/`     | RL         | GAE, rollout collection, checkpoints, `carla train` dry run **done**. PPO update, async workers, opponent pool: **interfaces + TODOs**.                                                                                                                                                                           |
-| `gui/`    | GUI        | Stub (Arcade).                                                                                                                                                                                                                                                                                                    |
+| `gui/`    | GUI        | **Implemented.** Arcade: play a seat against bots (setup, building, robber, development cards, bank trade, discards), watch live bot games, replay records with play/pause, step, seek and speed. Procedural art only; press H for the shortcuts.                                                                 |
 
 ## Setup
 
@@ -42,6 +42,9 @@ carla replay runs/games/game_0000.json.gz --step 120   # position after line #12
 carla tournament --config configs/bots.yaml            # win rates with 95% CIs
 carla config configs/experiments/gnn.yaml model.belief=gru   # print a resolved config
 carla train configs/smoke.yaml       # dry run until the PPO update lands
+carla gui --play --seat 0 --opponents heuristic   # needs the gui extra; H shows the shortcuts
+carla gui --watch --opponents heuristic,random    # a live bot game with play/pause/step/seek
+carla gui runs/games/game_0000.json.gz            # replay a record
 python scripts/benchmark_engine.py
 sbatch --array=0-2 scripts/slurm/train.sbatch configs/experiments/mlp.yaml   # 3 seeds
 ```
