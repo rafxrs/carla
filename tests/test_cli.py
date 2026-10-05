@@ -1,4 +1,5 @@
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -77,13 +78,12 @@ def test_gui_command_options(gui_calls, tmp_path):
     (options,) = gui_calls
     assert (options.mode, options.seat, options.opponents) == ("play", 2, ("heuristic", "random"))
     assert options.delay == 0.2 and options.record is None
-    assert options.config.seed == 7 and options.config.engine.vp_to_win == 8
-    assert options.config.runtime.output_dir == "x"
+    assert options.seed == 7 and options.engine.vp_to_win == 8 and options.output_dir == Path("x")
     assert main(["gui", "--watch", "--config", "configs/bots.yaml"]) == 0
-    watch = gui_calls[-1]
-    assert watch.mode == "watch" and watch.opponents == ()
-    assert watch.config.eval.agents == ("heuristic", "random", "random", "random")
+    watch = gui_calls[-1]  # Watch mode defaults to the config's eval.agents
+    assert watch.mode == "watch" and watch.opponents == ("heuristic", "random", "random", "random")
     assert main(["gui"]) == 0 and gui_calls[-1].mode == "play"
+    assert gui_calls[-1].opponents == ("heuristic",) and gui_calls[-1].engine.max_turns is None
     record = tmp_path / "game.json"
     record.write_text("{}", encoding="utf-8")
     assert main(["gui", str(record)]) == 0

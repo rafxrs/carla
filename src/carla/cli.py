@@ -182,7 +182,17 @@ def _gui(args) -> int:
     overrides = [*args.overrides, *([f"seed={args.seed}"] if args.seed is not None else [])]
     config = load_config(args.config, overrides)
     mode = "replay" if args.record is not None else "watch" if args.watch else "play"
-    options = GuiOptions(mode, args.record, args.seat, args.opponents, args.delay, config)
+    default = config.eval.agents if mode == "watch" else ("heuristic",)
+    options = GuiOptions(
+        mode=mode,
+        record=args.record,
+        seat=args.seat,
+        opponents=args.opponents or default,
+        delay=args.delay,
+        seed=config.seed,
+        engine=config.engine,
+        output_dir=Path(config.runtime.output_dir),
+    )
     try:
         gui_main(options)
     except ImportError as exc:

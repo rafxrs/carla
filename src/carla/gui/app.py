@@ -16,8 +16,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from carla.agents import make_agent
-from carla.config.schema import ExperimentConfig
 from carla.engine.actions import Action, ActionType
+from carla.engine.config import EngineConfig
 from carla.engine.constants import NUM_PLAYERS
 from carla.engine.game import IllegalActionError
 from carla.engine.record import GameRecord
@@ -49,18 +49,22 @@ __all__ = ["GuiApp", "GuiOptions", "HumanAgent", "main"]
 
 @dataclass(frozen=True)
 class GuiOptions:
-    """What the window starts with (see `carla gui --help`)."""
+    """What the window starts with; `carla gui` fills it from an experiment config."""
 
     mode: str = "play"
     """"play" (a seat against bots), "watch" (bots only) or "replay" (a saved record)."""
     record: Path | None = None
     seat: int = 0
     """The human's seat in Play mode."""
-    opponents: tuple[str, ...] = ()
-    """Agent names for the bot seats, cycled; empty: heuristic bots (Play), `eval.agents` (Watch)."""
+    opponents: tuple[str, ...] = ("heuristic",)
+    """Agent names for the bot seats (all four in Watch mode), cycled."""
     delay: float = 0.6
     """Seconds between automatic moves at speed 1×."""
-    config: ExperimentConfig = field(default_factory=ExperimentConfig)
+    seed: int = 0
+    """Experiment seed: the i-th game of the window uses `derive_seed(seed, "game", i)`."""
+    engine: EngineConfig = field(default_factory=EngineConfig)
+    output_dir: Path = Path("runs")
+    """Saved game records go to `output_dir/gui`."""
 
 
 # Arcade (pyglet) key codes are X11 keysyms; letters are their lowercase ASCII codes.
@@ -143,7 +147,7 @@ class GuiApp:
         self.window: arcade.Window | None = None
         self.painter: Painter | None = None
         seat = options.seat if self.mode == "play" else -1
-        self.controller = Controller(seat, options.config.engine.allow_domestic_trade)
+        self.controller = Controller(seat, options.engine.allow_domestic_trade)
         self.session = self._new_session()
         self._sync()
 
@@ -154,18 +158,16 @@ class GuiApp:
         if self.mode == "replay":
             assert o.record is not None
             return GameSession(GameRecord.load(o.record))
-        seed = derive_seed(o.config.seed, "game", self.games)
+        seed = derive_seed(o.seed, "game", self.games)
         self.games += 1
-        names = list(
-            o.opponents or (("heuristic",) if self.mode == "play" else o.config.eval.agents)
-        )
+        names = list(o.opponents or ("heuristic",))
         bots = (names[i % len(names)] for i in range(NUM_PLAYERS))
         agents = [
             HumanAgent() if self.mode == "play" and seat == o.seat else make_agent(next(bots))
             for seat in range(NUM_PLAYERS)
         ]
         viewer = o.seat if self.mode == "play" else None
-        return GameSession.new_game(o.config.engine, seed, agents, viewer)
+        return GameSession.new_game(o.engine, seed, agents, viewer)
 
     def new_game(self) -> None:
         if self.mode == "replay":
@@ -281,7 +283,7 @@ class GuiApp:
             return None
         s = self.session
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        directory = Path(self.options.config.runtime.output_dir) / "gui"
+        directory = Path(self.options.output_dir) / "gui"
         path = directory / f"game-{stamp}-seed{s.record.seed}.json"
         s.final_record().save(path)
         self.notify(f"Saved {path}")

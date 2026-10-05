@@ -6,7 +6,6 @@ import sys
 
 import pytest
 
-from carla.config import load_config
 from carla.engine.actions import ActionType
 from carla.engine.record import GameRecord
 from carla.engine.rng import Rng
@@ -220,8 +219,7 @@ def test_replay_mode(tmp_path):
 
 
 def test_game_over_dialog_saves_reviews_and_restarts(tmp_path):
-    config = load_config(None, [f"runtime.output_dir={tmp_path.as_posix()}"])
-    app = play_app(config=config)
+    app = play_app(output_dir=tmp_path)
     rng = Rng(5)
     s = app.session
     while not s.game.is_over:
