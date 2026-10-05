@@ -81,6 +81,8 @@ class GameSession:
         self._turn_logged = -1
         self.version = 0
         """Changes whenever the position shown changes."""
+        self.finished = False
+        """The game has reached its end (whichever position is shown)."""
         self._log(LogEntry(0, -1, header="Setup"))
         if record.steps:
             self._index_record()
@@ -109,6 +111,7 @@ class GameSession:
             before = (game.turn, game.phase, game.current_player)
             if i % self.CHECKPOINT_EVERY == 0:
                 self._checkpoints[i] = game.snapshot()
+            self.finished = game.is_over
 
     # ------------------------------------------------------------------ state
 
@@ -219,6 +222,7 @@ class GameSession:
         self._log_step(game.num_steps, player, events, *before)
         if game.num_steps % self.CHECKPOINT_EVERY == 0:
             self._checkpoints[game.num_steps] = game.snapshot()
+        self.finished = game.is_over
         self.version += 1
         return events
 

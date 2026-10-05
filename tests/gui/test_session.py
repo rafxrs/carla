@@ -66,18 +66,26 @@ def test_live_bot_game_matches_the_eval_runner(tmp_path):
     names = ["heuristic", "random", "heuristic", "random"]
     session = GameSession.new_game(EngineConfig(), 3, [make_agent(n) for n in names])
     assert session.live and session.human_seat is None and session.seat_names() == names
+    assert not session.finished
     while session.step_forward():
         pass
     reference = play_game([make_agent(n) for n in names], seed=3)
-    assert session.game.is_over and not session.can_extend
+    assert session.game.is_over and session.finished and not session.can_extend
     assert (session.game.winner, session.length) == (reference.winner, reference.steps)
     saved = session.final_record().save(tmp_path / "game.json")
     loaded = GameRecord.load(saved)
     assert loaded.metadata["agents"] == names
     assert loaded.replay().state_hash() == session.game.state_hash()
     session.seek(40)  # live sessions can be reviewed too
-    assert session.game.state_hash() == loaded.replay(40).state_hash()
+    assert session.game.state_hash() == loaded.replay(40).state_hash() and session.finished
+    assert GameSession(loaded).finished and not GameSession(record_of_unfinished()).finished
     assert session.final_record().hashes == loaded.hashes
+
+
+def record_of_unfinished() -> GameRecord:
+    game = Game(seed=2)
+    game.play(game.legal_actions()[:1])
+    return GameRecord.from_game(game)
 
 
 def test_play_mode_full_game_through_the_controller():
