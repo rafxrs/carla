@@ -237,9 +237,13 @@ class GameSession:
         for event in events:
             self._log(LogEntry(step, event.player if event.player >= 0 else player, event))
 
+    def visible_count(self) -> int:
+        """Number of log entries up to the position shown."""
+        return bisect_right(self._log_steps, self.position)
+
     def visible_log(self) -> list[LogEntry]:
         """Log entries up to the position shown."""
-        return self.log[: bisect_right(self._log_steps, self.position)]
+        return self.log[: self.visible_count()]
 
     def entry_text(self, entry: LogEntry) -> str:
         """The entry as the viewer may read it (hidden cards stay hidden)."""
