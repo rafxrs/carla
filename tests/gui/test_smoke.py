@@ -1,5 +1,6 @@
 """Smoke test of the real Arcade window, hidden (skipped without Arcade or a display)."""
 
+from collections.abc import Iterator, Sequence
 from typing import TYPE_CHECKING
 
 import pytest
@@ -12,9 +13,14 @@ try:
 except Exception as exc:  # pyglet raises when it cannot reach a display
     pytest.skip(f"no display: {exc}", allow_module_level=True)
 
+from carla.engine.actions import Action
+from carla.engine.actions import ActionType as T
+from carla.engine.constants import DevCard
 from carla.engine.record import GameRecord
+from carla.engine.rng import Rng
 from carla.engine.simulate import play_random_game
 from carla.gui.app import DIGIT_KEYS, KEY_COMMANDS, MOUSE_LEFT, MOUSE_RIGHT, GuiApp, GuiOptions
+from carla.gui.geometry import Point
 
 
 @pytest.fixture
@@ -108,3 +114,73 @@ def test_key_and_mouse_codes_match_arcade():
     assert DIGIT_KEYS[k.KEY_1] == DIGIT_KEYS[k.NUM_1] == 1
     assert DIGIT_KEYS[k.KEY_9] == DIGIT_KEYS[k.NUM_9] == 9
     assert (MOUSE_LEFT, MOUSE_RIGHT) == (arcade.MOUSE_BUTTON_LEFT, arcade.MOUSE_BUTTON_RIGHT)
+
+
+def click(window: "Window", xy: tuple[float, float]) -> None:
+    for event in ("on_mouse_motion", "on_mouse_press", "on_mouse_release"):
+        args = (0, 0) if event == "on_mouse_motion" else (arcade.MOUSE_BUTTON_LEFT, 0)
+        send(window, event, xy[0], xy[1], *args)
+
+
+def screen_clicks(app: GuiApp, action: Action, legal: Sequence[Action]) -> Iterator[Point]:
+    """Where a player clicks, one point at a time, to make `action` (pickers open in between)."""
+    tr, t = app.board.transform, action.type
+
+    def button(name: str) -> Point:
+        hit = next(b for b in app.buttons() if b.id == name)
+        assert hit.enabled
+        return hit.rect.cx, hit.rect.cy
+
+    def option(key: object) -> Point:
+        layout = app.picker_layout()
+        assert layout is not None
+        cell = next(r for o, r in layout.options if o.key == key)
+        return cell.cx, cell.cy
+
+    simple = {T.ROLL_DICE: "roll", T.END_TURN: "end_turn", T.BUY_DEV_CARD: "buy_dev"}
+    if t in simple:
+        yield button(simple[t])
+    elif t in (T.BUILD_SETTLEMENT, T.BUILD_CITY):
+        yield tr.corners[action.corner]
+    elif t == T.BUILD_ROAD:
+        yield tr.edges[action.edge]
+    elif t == T.MOVE_ROBBER:
+        yield tr.tiles[action.tile]
+        if sum(a.type == t and a.tile == action.tile for a in legal) > 1:
+            yield option(action.player)
+    elif t == T.DISCARD:
+        yield option(action.resource)
+    elif t == T.MARITIME_TRADE:
+        yield button("bank_trade")
+        yield option(action.resource)
+        yield option(action.resource2)
+    else:
+        assert t == T.PLAY_DEV_CARD
+        yield button("play_dev")
+        yield option(action.dev)
+        if action.dev in (DevCard.YEAR_OF_PLENTY, DevCard.MONOPOLY):
+            yield option(action.resource)
+        if action.dev == DevCard.YEAR_OF_PLENTY:
+            yield option(action.resource2)
+
+
+def test_a_human_finishes_a_game_against_heuristic_bots_by_clicking(open_app):
+    app, window = open_app(GuiOptions(mode="play", seat=1, delay=0.0))
+    s, rng, moves = app.session, Rng(1), 0
+    assert s.seat_names() == ["heuristic", "You", "heuristic", "heuristic"]
+    while not s.game.is_over:
+        if not s.waiting_for_human:
+            app.on_update(0.05)
+            continue
+        legal = s.game.legal_actions()
+        kinds = sorted({a.type for a in legal})
+        kind = kinds[rng.randbelow(len(kinds))]
+        target = rng.choice([a for a in legal if a.type == kind])
+        for xy in screen_clicks(app, target, legal):
+            click(window, xy)
+        assert s.game.history[-1].action == target
+        moves += 1
+        if moves % 10 == 0:
+            assert drawn_something(app)
+    app.on_update(0.05)
+    assert app.results and moves > 20 and drawn_something(app)
