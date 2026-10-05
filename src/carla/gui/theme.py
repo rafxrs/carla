@@ -54,6 +54,8 @@ TERRAIN_DETAIL: dict[int, Color] = {
     DESERT: rgb(0xC9B27C),
 }
 """Colour of the small procedural motifs (trees, mounds, sheep, furrows, peaks, dunes)."""
+LIGHT_TERRAIN = frozenset({Resource.WOOL, Resource.GRAIN, DESERT})
+"""Terrains light enough that dark ink reads better than white on them."""
 TRUNK = rgb(0x6B4F35)
 SNOW = rgb(0xEEF1F4)
 SHEEP_HEAD = rgb(0x4A4A48)
@@ -97,6 +99,12 @@ SHADE = rgb(0x0B0F13, 170)
 CARD_BACK = rgb(0x5B6B7C)
 DICE = rgb(0xF7F3EA)
 DICE_PIP = rgb(0x2B2B2B)
+
+
+def ink_on(terrain: int) -> Color:
+    """Text colour for labels drawn on a terrain-coloured surface."""
+    return INK if terrain in LIGHT_TERRAIN else WHITE
+
 
 # ------------------------------------------------------------------ labels
 RESOURCE_LABELS = ("Lumber", "Brick", "Wool", "Grain", "Ore")
