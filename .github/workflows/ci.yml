@@ -1,0 +1,20 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install (CPU torch)
+        run: uv sync --extra cpu --extra dev
+      - name: Lint
+        run: |
+          uv run ruff check src tests scripts
+          uv run black --check src tests scripts
+      - name: Test
+        run: uv run pytest -n auto

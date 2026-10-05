@@ -1,0 +1,4 @@
+extends: gnn.yaml
+name: gnn_attention
+model:
+  set_attention: true

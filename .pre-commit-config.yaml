@@ -1,0 +1,14 @@
+# Uses the project's own black/ruff (activate the venv): `pre-commit install` once.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff
+        entry: ruff check --fix
+        language: system
+        types: [python]
+      - id: black
+        name: black
+        entry: black
+        language: system
+        types: [python]

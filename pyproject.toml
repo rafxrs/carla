@@ -1,0 +1,96 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "carla"
+version = "0.1.0"
+description = "CARLA: Catan Advanced Reinforcement Learning Agent (ECSE 552)"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  { name = "Rafael Reis" },
+  { name = "Lucas Bessai" },
+  { name = "Suraj Vadulas" },
+  { name = "Dan Suissa" },
+]
+dependencies = [
+  "numpy>=1.26",
+  "gymnasium>=1.0",
+  "pyyaml>=6.0",
+  "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+# Pick exactly one torch flavour: `cpu` (cluster, laptops) or `cu130` (RTX 50xx; NVIDIA driver >= 580).
+cpu = ["torch>=2.7"]
+cu130 = ["torch>=2.7"]
+gui = ["arcade>=3.0"]
+dev = [
+  "pytest>=8.0",
+  "pytest-xdist>=3.5",
+  "ruff>=0.6",
+  "black>=24.4",
+  "pre-commit>=3.7",
+]
+
+[project.scripts]
+carla = "carla.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/carla"]
+
+# ---------------------------------------------------------------- uv / PyTorch wheels
+[tool.uv]
+conflicts = [[{ extra = "cpu" }, { extra = "cu130" }]]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cu130", extra = "cu130" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+# ---------------------------------------------------------------- tooling
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "C4", "NPY", "RUF", "PT"]
+ignore = [
+  "E501",   # line length is black's job
+  "PT018",  # composite asserts are fine in tests
+  "RUF001", # allow unicode arrows/dashes in strings
+  "RUF002",
+  "RUF003",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["carla"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra --strict-markers"
+markers = ["slow: long-running tests (deselect with -m 'not slow')"]
+filterwarnings = ["error::DeprecationWarning:carla.*"]
+
+[tool.pyright]
+include = ["src", "tests", "scripts"]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"

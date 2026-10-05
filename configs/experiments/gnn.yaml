@@ -1,0 +1,5 @@
+extends: ../base.yaml
+name: gnn
+model:
+  encoder: gnn
+  gnn_layers: 4

@@ -1,0 +1,8 @@
+# Baseline tournament: heuristic bot against random bots.
+extends: base.yaml
+name: bots
+eval:
+  agents: [heuristic, random, random, random]
+  num_games: 200
+  seeds: [0, 1, 2]
+  num_workers: 4

@@ -1,0 +1,7 @@
+# Everything on, including domestic trading (engine support pending).
+extends: gnn_attention_belief.yaml
+name: full_trade
+engine:
+  allow_domestic_trade: true
+model:
+  trade_decoder: gru
