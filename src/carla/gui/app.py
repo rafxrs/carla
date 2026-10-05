@@ -493,16 +493,14 @@ class GuiApp:
 
     def results_buttons(self) -> list[Button]:
         p = self.results_panel()
-        items = [
+        items = (
             ("save", "Save record", "S"),
             ("review", "Review", ""),
             ("new_game", "New game", "N"),
-        ]
-        items.append(("close", "Close", "Esc"))
+            ("close", "Close", "Esc"),
+        )
         cells = Rect(p.x + 16, p.y + 16, p.w - 32, 36).columns(len(items), 8)
-        return [
-            Button(i, label, r, hotkey=key) for (i, label, key), r in zip(items, cells, strict=True)
-        ]
+        return [Button(i, text, r, hotkey=k) for (i, text, k), r in zip(items, cells, strict=True)]
 
     # ------------------------------------------------------------------ frame
 
@@ -585,16 +583,9 @@ class GuiApp:
         slider = self.slider()
         if slider is not None:
             draw_slider(layer, slider, slider.rect.inset(-6, -10).contains(x, y) or self._dragging)
-            count = f"{slider.value} / {slider.maximum}"
+            count, x_count = f"{slider.value} / {slider.maximum}", slider.rect.right + 14
             layer.text(
-                count,
-                slider.rect.right + 14,
-                bar.cy,
-                theme.FONT,
-                theme.TEXT_MUTED,
-                False,
-                "left",
-                "center",
+                count, x_count, bar.cy, theme.FONT, theme.TEXT_MUTED, False, "left", "center"
             )
 
     def _picker_layer(self) -> Layer:
@@ -628,23 +619,14 @@ class GuiApp:
             color = theme.PLAYER[winner]
         layer.text(title, p.cx, p.top - 34, theme.FONT_TITLE + 4, color, True, "center", "center")
         detail = f"{game.turn} turns · {s.length} steps · seed {s.record.seed}"
-        layer.text(
-            detail, p.cx, p.top - 64, theme.FONT, theme.TEXT_MUTED, False, "center", "center"
-        )
+        muted = theme.TEXT_MUTED
+        layer.text(detail, p.cx, p.top - 64, theme.FONT, muted, False, "center", "center")
         order = sorted(range(NUM_PLAYERS), key=lambda q: -game.victory_points(q))
         for row, q in enumerate(order):
             y = p.top - 100 - row * 28
             layer.rounded_rect(p.x + 60, y - 9, 18, 18, 4, theme.PLAYER[q])
-            layer.text(
-                f"P{q}  {names[q]}",
-                p.x + 90,
-                y,
-                theme.FONT,
-                theme.TEXT,
-                q == winner,
-                "left",
-                "center",
-            )
+            name = f"P{q}  {names[q]}"
+            layer.text(name, p.x + 90, y, theme.FONT, theme.TEXT, q == winner, "left", "center")
             vp = f"{game.victory_points(q)} VP"
             layer.text(vp, p.right - 60, y, theme.FONT, theme.TEXT, True, "right", "center")
         x, y = self.mouse
@@ -660,25 +642,13 @@ class GuiApp:
         p = Rect(w / 2 - pw / 2, h / 2 - ph / 2, pw, ph)
         layer.rounded_rect(p.x, p.y, p.w, p.h, 12, theme.PANEL)
         layer.rounded_frame(p.x, p.y, p.w, p.h, 12, 1.5, theme.PANEL_EDGE)
+        y = p.top - 22
         layer.text(
-            "Keyboard and mouse",
-            p.x + 24,
-            p.top - 22,
-            theme.FONT_LARGE,
-            theme.TEXT,
-            True,
-            "left",
-            "center",
+            "Keyboard and mouse", p.x + 24, y, theme.FONT_LARGE, theme.TEXT, True, "left", "center"
         )
+        close = "Esc or click to close"
         layer.text(
-            "Esc or click to close",
-            p.right - 24,
-            p.top - 22,
-            theme.FONT_SMALL,
-            theme.TEXT_DIM,
-            False,
-            "right",
-            "center",
+            close, p.right - 24, y, theme.FONT_SMALL, theme.TEXT_DIM, False, "right", "center"
         )
         for i, (keys, what) in enumerate(HELP_LINES):
             y = p.top - 60 - i * 26
