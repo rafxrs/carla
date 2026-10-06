@@ -62,7 +62,12 @@ def main(argv: list[str] | None = None) -> int:
         help="bots for the other seats (all four with --watch), cycled "
         "(default: heuristic; eval.agents with --watch)",
     )
-    p.add_argument("--seed", type=int, help="config seed; game i uses derive_seed(seed, 'game', i)")
+    p.add_argument(
+        "--seed",
+        type=int,
+        help="config seed; game i uses derive_seed(seed, 'game', i) "
+        "(default: the config's seed, or a random one without --config)",
+    )
     p.add_argument("--delay", type=float, default=0.6, help="seconds between bot moves at 1x")
     p.add_argument(
         "--config", type=Path, help="experiment config (engine rules, seed, eval.agents)"
@@ -186,7 +191,11 @@ def _gui(args) -> int:
     if args.record is not None and not args.record.exists():
         print(f"carla gui: no such record {args.record}", file=sys.stderr)
         return 2
-    overrides = [*args.overrides, *([f"seed={args.seed}"] if args.seed is not None else [])]
+    seed = args.seed
+    if seed is None and args.config is None:  # a new board each launch, still reproducible
+        seed = random.randrange(2**31)
+        print(f"carla gui: seed {seed} (pass --seed {seed} to play this board again)")
+    overrides = [*args.overrides, *([f"seed={seed}"] if seed is not None else [])]
     config = load_config(args.config, overrides)
     mode = "replay" if args.record is not None else "watch" if args.watch else "play"
     default = config.eval.agents if mode == "watch" else ("heuristic",)

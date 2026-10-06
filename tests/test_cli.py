@@ -105,3 +105,11 @@ def test_gui_command_errors(gui_calls, tmp_path, capsys, monkeypatch):
     assert "needs Arcade" in capsys.readouterr().err
     assert main(["gui", "--set", "engine.allow_domestic_trade=true"]) == 1
     assert "domestic trade" in capsys.readouterr().err
+
+
+def test_gui_picks_a_random_seed_unless_one_is_given(gui_calls, capsys):
+    assert main(["gui"]) == 0 and main(["gui"]) == 0
+    first, second = gui_calls
+    assert first.seed != second.seed and f"seed {first.seed}" in capsys.readouterr().out
+    assert main(["gui", "--seed", "5"]) == 0 and gui_calls[-1].seed == 5
+    assert main(["gui", "--config", "configs/bots.yaml"]) == 0 and gui_calls[-1].seed == 0
