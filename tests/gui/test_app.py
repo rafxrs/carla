@@ -7,12 +7,13 @@ import sys
 import pytest
 
 from carla.engine.actions import ActionType
+from carla.engine.constants import DevCard
 from carla.engine.record import GameRecord
 from carla.engine.rng import Rng
 from carla.engine.simulate import play_random_game
 from carla.engine.state import Phase
 from carla.gui.app import HELP_LINES, KEY_COMMANDS, MOUSE_RIGHT, GuiApp, GuiOptions
-from tests.engine.scenario import give
+from tests.engine.scenario import give, give_dev
 
 SETUP = (Phase.SETUP_SETTLEMENT, Phase.SETUP_ROAD)
 
@@ -337,8 +338,8 @@ def test_playback_controls_sit_in_the_bar_under_the_status(tmp_path, mode, size)
     assert slider is not None and slider.rect.w >= 140
     for rect in (*(b.rect for b in app.playback_buttons()), slider.rect.inset(-6, -10)):
         assert inside(rect, bar) and not overlaps(rect, viewport)
-    for b in app.action_buttons():
-        assert inside(b.rect, app.layout.actions) and not overlaps(b.rect, viewport)
+    for b in app.hand_bar().buttons:
+        assert inside(b.rect, app.layout.hand) and not overlaps(b.rect, viewport)
     assert any("drag the top bar to seek" in what for _, what in HELP_LINES)
 
 
@@ -355,3 +356,106 @@ def test_seeking_during_live_play_pauses_the_game_until_the_end():
     end = next(b for b in app.playback_buttons() if b.id == "end")
     click(app, (end.rect.cx, end.rect.cy))
     assert app.session.position == here and app.controller.active
+
+
+def main_phase(app: GuiApp) -> None:
+    """Play the setup and the first roll of seat 0, up to its main phase."""
+    play_setup(app)
+    press(app, "roll")
+    run_bots(app)
+    while app.session.game.phase != Phase.MAIN:  # a 7: discard and move the robber
+        if app.controller.picker is not None:
+            options = app.controller.picker.options
+            press_digit(app, next(i for i, o in enumerate(options, 1) if o.enabled))
+        else:
+            click_first_target(app)
+        run_bots(app)
+
+
+def refresh(app: GuiApp) -> None:
+    """The test changed the position behind the session's back."""
+    app.session.version += 1
+    app.on_update(0.0)
+
+
+def centre(button) -> tuple[float, float]:
+    return button.rect.cx, button.rect.cy
+
+
+def test_hand_bar_trade_and_buy_dev_buttons():
+    app = play_app()
+    main_phase(app)
+    give(app.session.game, 0, (4, 0, 2, 2, 2))
+    refresh(app)
+    bar = app.hand_bar()
+    assert [b.id for b in bar.buttons] == ["bank_trade", "buy_dev", "roll", "end_turn"]
+    assert [b.label for b in bar.buttons] == ["Trade", "Buy dev", "Roll", "End turn"]
+    tiles = {b.id: b for b in bar.buttons}
+    assert tiles["bank_trade"].enabled and tiles["buy_dev"].enabled and not tiles["roll"].enabled
+    assert [c.count for c in bar.cards[:5]] == list(app.session.game.state.hands[0])
+    click(app, centre(tiles["bank_trade"]))  # the bank and port trade picker
+    assert app.controller.picker is not None and app.controller.picker.kind == "give"
+    press(app, "escape")
+    held = sum(app.session.game.state.dev_hands[0])
+    click(app, centre(tiles["buy_dev"]))
+    assert app.session.game.history[-1].action.type == ActionType.BUY_DEV_CARD
+    assert sum(app.session.game.state.dev_hands[0]) == held + 1
+    (new,) = [c for c in app.hand_bar().cards if c.kind == "dev"]
+    assert new.dimmed and not new.playable  # bought this turn
+    before = app.session.position
+    click(app, (new.rect.cx, new.rect.cy))
+    assert app.session.position == before  # cannot be played yet
+
+
+def test_clicking_a_playable_development_card_plays_it():
+    app = play_app()
+    main_phase(app)
+    give_dev(app.session.game, 0, DevCard.KNIGHT)
+    give_dev(app.session.game, 0, DevCard.YEAR_OF_PLENTY)
+    refresh(app)
+    cards = {c.index: c for c in app.hand_bar().cards if c.kind == "dev"}
+    assert cards[DevCard.KNIGHT].playable and not cards[DevCard.KNIGHT].dimmed
+    knight = app.mouse = (cards[DevCard.KNIGHT].rect.cx, cards[DevCard.KNIGHT].rect.cy)
+    assert [layer.name for layer in app.frame()][-1] == "tooltip"
+    click(app, (cards[DevCard.YEAR_OF_PLENTY].rect.cx, cards[DevCard.YEAR_OF_PLENTY].rect.cy))
+    assert app.controller.picker is not None and app.controller.picker.kind == "plenty"
+    press(app, "escape")
+    click(app, knight)
+    last = app.session.game.history[-1].action
+    assert (last.type, last.dev) == (ActionType.PLAY_DEV_CARD, DevCard.KNIGHT)
+    assert app.session.game.phase == Phase.MOVE_ROBBER and app.controller.tile_targets()
+    assert not any(c.playable for c in app.hand_bar().cards)  # one card per turn
+
+
+def test_watch_and_replay_hand_bars_are_read_only():
+    app = GuiApp(GuiOptions(mode="watch", delay=0.0))
+    for _ in range(60):
+        app.on_update(0.05)
+    bar = app.hand_bar()
+    s = app.session.game.state
+    seat = s.decision_player
+    assert bar.buttons == () and bar.hand.title == f"P{seat}'s hand"
+    assert [c.count for c in bar.cards[:5]] == list(s.hands[seat])
+    assert not any(c.playable for c in bar.cards)
+    before = app.session.position
+    press(app, "play_pause")
+    click(app, (bar.cards[0].rect.cx, bar.cards[0].rect.cy))
+    assert app.session.position == before
+    assert app.buttons() == app.playback_buttons()
+
+
+def test_unlabelled_action_tiles_explain_themselves_on_hover():
+    app = play_app()
+    app.on_resize(1000, 660)
+    main_phase(app)
+    for card in DevCard:  # a crowded hand squeezes the tiles down to their icons
+        give_dev(app.session.game, 0, card, 2)
+        app.session.game.state.dev_bought_this_turn[card] = 1
+    refresh(app)
+    bar = app.hand_bar()
+    assert not bar.labelled
+    buy = next(b for b in bar.buttons if b.id == "buy_dev")
+    app.mouse = centre(buy)
+    tooltip = app.frame()[-1]
+    assert tooltip.name == "tooltip" and tooltip.texts[0].text == "Buy dev (B)"
+    assert all(app.layout.hand.contains(c.rect.x, c.rect.y) for c in bar.cards)

@@ -499,8 +499,17 @@ def draw_dev_glyph(
             layer.triangle((cx, cy), a, b, ink)
 
 
-def draw_tile_button(layer: Layer, button: Button, hovered: bool = False) -> None:
-    """A large action button: its icon above its label, the hotkey in the corner."""
+def tile_label_fits(button: Button) -> bool:
+    """The tile is roomy enough to show its label under the icon."""
+    r = button.rect
+    return r.h >= 52 and len(button.label) * theme.FONT_SMALL * 1.333 * 0.62 <= r.w - 8
+
+
+def draw_tile_button(
+    layer: Layer, button: Button, hovered: bool = False, labelled: bool | None = None
+) -> None:
+    """A large action button: its icon above its label (if `labelled`, by default when it
+    fits), the hotkey in the corner."""
     r = button.rect
     if not button.enabled:
         fill, ink = theme.BUTTON_DISABLED, theme.BUTTON_TEXT_DISABLED
@@ -509,8 +518,7 @@ def draw_tile_button(layer: Layer, button: Button, hovered: bool = False) -> Non
     layer.rounded_rect(r.x, r.y, r.w, r.h, 8, fill)
     if button.accent and button.enabled:
         layer.rounded_frame(r.x, r.y, r.w, r.h, 8, 2, theme.ACCENT)
-    fits = len(button.label) * theme.FONT_SMALL * 1.333 * 0.62 <= r.w - 8
-    labelled = fits and r.h >= 52
+    labelled = tile_label_fits(button) if labelled is None else labelled
     icon_y = r.cy + (r.h * 0.13 if labelled else 0)
     draw_icon(layer, button.icon, r.cx, icon_y, min(r.w, r.h) * 0.36, ink)
     if labelled:

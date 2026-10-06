@@ -97,7 +97,8 @@ class Layout:
     """Strip under the status: play/pause, steps, the seek slider and the speed."""
     viewport: Rect
     """Where the board itself is fitted."""
-    actions: Rect
+    hand: Rect
+    """Bottom strip: the cards of a hand and, in Play mode, the action buttons."""
     side: Rect
     log: Rect
 
@@ -108,12 +109,13 @@ def compute_layout(width: float, height: float) -> Layout:
     board = Rect(0, 0, width - side_w, height)
     status, rest = board.take_top(theme.STATUS_HEIGHT)
     playback, rest = rest.take_top(theme.PLAYBACK_HEIGHT)
-    actions = Rect(0, 0, board.w, min(theme.ACTION_HEIGHT, rest.h / 2))
-    viewport = Rect(theme.PAD, actions.top, board.w - 2 * theme.PAD, rest.h - actions.h)
+    lo_h, hi_h = theme.HAND_HEIGHT
+    hand = Rect(0, 0, board.w, min(max(height * 0.13, lo_h), hi_h, rest.h / 2))
+    viewport = Rect(theme.PAD, hand.top, board.w - 2 * theme.PAD, rest.h - hand.h)
     side_h = min(theme.SIDE_HEIGHT, max(height - theme.LOG_MIN_HEIGHT, height * 0.55))
     side = Rect(board.w, height - side_h, side_w, side_h)
     log = Rect(board.w, 0, side_w, height - side_h)
-    return Layout(width, height, board, status, playback, viewport, actions, side, log)
+    return Layout(width, height, board, status, playback, viewport, hand, side, log)
 
 
 def _port_positions() -> tuple[Point, ...]:

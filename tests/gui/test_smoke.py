@@ -156,8 +156,12 @@ def screen_clicks(app: GuiApp, action: Action, legal: Sequence[Action]) -> Itera
         yield option(action.resource2)
     else:
         assert t == T.PLAY_DEV_CARD
-        yield button("play_dev")
-        yield option(action.dev)
+        card = next(
+            c
+            for c in app.hand_bar().cards
+            if c.kind == "dev" and c.index == action.dev and c.playable
+        )
+        yield card.rect.x + 3, card.rect.cy  # the left edge stays visible when cards overlap
         if action.dev in (DevCard.YEAR_OF_PLENTY, DevCard.MONOPOLY):
             yield option(action.resource)
         if action.dev == DevCard.YEAR_OF_PLENTY:

@@ -128,12 +128,13 @@ WINDOW_SIZE = (1280, 800)
 MIN_WINDOW_SIZE = (1000, 660)
 SIDE_WIDTH = (330, 420)
 """Minimum and maximum width of the right-hand column (side panel and log)."""
-SIDE_HEIGHT = 520
+SIDE_HEIGHT = 400
 """Height the side panel would like; the log gets the rest of the column."""
 LOG_MIN_HEIGHT = 150
 STATUS_HEIGHT = 40
 PLAYBACK_HEIGHT = 40
-ACTION_HEIGHT = 62
+HAND_HEIGHT = (84, 108)
+"""Minimum and maximum height of the hand bar along the bottom of the board column."""
 PAD = 10
 FONT = 11
 FONT_SMALL = 9

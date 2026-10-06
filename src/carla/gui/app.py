@@ -27,7 +27,17 @@ from carla.gui import theme
 from carla.gui.board_view import BoardMarks, BoardView
 from carla.gui.controller import Controller
 from carla.gui.geometry import Rect, compute_layout
-from carla.gui.panels import LogView, draw_side_panel, draw_status, panel_view
+from carla.gui.panels import (
+    HandBar,
+    LogView,
+    card_tooltip,
+    draw_hand_bar,
+    draw_side_panel,
+    draw_status,
+    hand_view,
+    layout_hand_bar,
+    panel_view,
+)
 from carla.gui.render import Layer, Painter
 from carla.gui.session import GameSession, HumanAgent, Pacer
 from carla.gui.widgets import (
@@ -38,6 +48,7 @@ from carla.gui.widgets import (
     draw_button,
     draw_picker,
     draw_slider,
+    draw_tooltip,
     layout_picker,
 )
 
@@ -123,6 +134,7 @@ HELP_LINES = (
     ("S  /  N", "save the game record / start a new game"),
     ("H", "show or hide this help"),
     ("Mouse", "click highlighted spots; the wheel scrolls the log; drag the top bar to seek"),
+    ("Cards", "click a development card in your hand to play it"),
 )
 
 
@@ -359,6 +371,11 @@ class GuiApp:
             if hit.enabled:
                 self.command(hit.id)
             return
+        card = self.hand_bar().card_at(x, y)
+        if card is not None:
+            if card.playable:
+                self.act(self.controller.play_card(card.index))
+            return
         slider = self.slider()
         if slider is not None and slider.rect.inset(-6, -10).contains(x, y):
             self._dragging = True
@@ -439,8 +456,8 @@ class GuiApp:
     # ------------------------------------------------------------------ widgets
 
     def buttons(self) -> list[Button]:
-        """Every clickable button outside dialogs: playback, then the play actions."""
-        return [*self.playback_buttons(), *self.action_buttons()]
+        """Every clickable button outside dialogs: playback, then the hand bar's actions."""
+        return [*self.playback_buttons(), *self.hand_bar().buttons]
 
     def playback_buttons(self) -> list[Button]:
         """The playback bar: steps around play/pause on the left, then (after the seek slider)
@@ -467,24 +484,12 @@ class GuiApp:
             out.append(Button("results", "Results", rect))
         return out
 
-    def action_buttons(self) -> list[Button]:
-        """The human's play buttons along the bottom (live Play mode only)."""
-        if not self.live_play:
-            return []
-        bar = self.layout.actions
-        y, h = bar.cy - 19, 38
-        left, right = bar.x + 12, bar.right - 12
-        specs = self.controller.buttons()
-        widths = [len(spec.label) * 7.6 + 38 for spec in specs]
-        scale = min(1.0, (right - left) / (sum(widths) + 8 * (len(widths) - 1)))
-        out, x = [], left
-        for spec, w in zip(specs, widths, strict=True):
-            w *= scale
-            accent = spec.id == "roll" and spec.enabled
-            rect = Rect(x, y, w, h)
-            out.append(Button(spec.id, spec.label, rect, spec.enabled, spec.hotkey, accent=accent))
-            x += w + 8 * scale
-        return out
+    def hand_bar(self) -> HandBar:
+        """The bottom bar: the human's hand in Play mode (with the action buttons while the
+        game runs), else the hand of the seat to act, read-only."""
+        actions = self.controller.buttons() if self.live_play else None
+        playable = self.controller.playable_cards()
+        return layout_hand_bar(self.layout.hand, hand_view(self.session), actions, playable)
 
     def slider(self) -> Slider | None:
         """The seek bar between the steps and the speed, if the window leaves room for it."""
@@ -572,10 +577,13 @@ class GuiApp:
         ui = Layer("ui")
         draw_status(ui, layout.status, *self.status(), "H: help")
         self._draw_playback(ui)
-        self._draw_actions(ui)
+        draw_hand_bar(ui, self.hand_bar(), self.mouse)
         draw_side_panel(ui, layout.side, panel_view(s))
         self.log_view.draw(ui, layout.log, s)
         layers.append(ui)
+        tooltip = self._tooltip_layer()
+        if tooltip is not None:
+            layers.append(tooltip)
         if self.controller.picker is not None:
             layers.append(self._picker_layer())
         if self.results:
@@ -603,12 +611,23 @@ class GuiApp:
             muted = theme.TEXT_MUTED
             layer.text(count, x_count, bar.cy, theme.FONT, muted, False, "left", "center")
 
-    def _draw_actions(self, layer: Layer) -> None:
-        bar = self.layout.actions
-        layer.rect(bar.x, bar.y, bar.w, bar.h, theme.with_alpha(theme.BACKGROUND, 150))
-        x, y = self.mouse
-        for b in self.action_buttons():
-            draw_button(layer, b, b.rect.contains(x, y) and b.enabled)
+    def _tooltip_layer(self) -> Layer | None:
+        """What the card (or unlabelled action tile) under the mouse is, unless a dialog is
+        open."""
+        if self.help or self.results or self.controller.picker is not None:
+            return None
+        bar = self.hand_bar()
+        card = bar.card_at(*self.mouse)
+        tile = None if bar.labelled else button_at(bar.buttons, *self.mouse)
+        if card is not None:
+            text, rect = card_tooltip(card), card.rect
+        elif tile is not None:
+            text, rect = f"{tile.label} ({tile.hotkey})", tile.rect
+        else:
+            return None
+        layer = Layer("tooltip")
+        draw_tooltip(layer, text, rect.cx, rect.top + 4, self.layout.board)
+        return layer
 
     def _picker_layer(self) -> Layer:
         layer = Layer("picker")

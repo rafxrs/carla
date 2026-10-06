@@ -109,13 +109,15 @@ def test_layout_partitions_the_window(size):
     assert layout.board.w + layout.side.w == pytest.approx(w)
     assert layout.side.h + layout.log.h == pytest.approx(h)
     assert layout.log.h > 0 and layout.viewport.h > 0 and layout.viewport.w > 0
-    for r in (layout.status, layout.playback, layout.viewport, layout.actions):
+    for r in (layout.status, layout.playback, layout.viewport, layout.hand):
         assert r.x >= 0 and r.right <= layout.board.right + 1e-9
         assert r.y >= 0 and r.top <= h + 1e-9
     assert layout.status.top == pytest.approx(h)  # status on top, playback right under it
     assert layout.playback.top == pytest.approx(layout.status.y)
     assert layout.playback.w == pytest.approx(layout.board.w)
-    assert layout.actions.top <= layout.viewport.y + 1e-9
+    assert layout.hand.y == 0 and layout.hand.w == pytest.approx(layout.board.w)
+    assert 84 <= layout.hand.h <= 108  # cards and action tiles need this much
+    assert layout.hand.top <= layout.viewport.y + 1e-9
     assert layout.viewport.top <= layout.playback.y + 1e-9
     assert layout.side.x == layout.log.x == layout.board.right
 
