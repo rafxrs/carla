@@ -1,13 +1,16 @@
-"""Buttons, the seek slider and picker dialogs: layout and hit-testing (pure) plus drawing into a
-`Layer`. Icons are drawn from triangles and bars, never from image files."""
+"""Buttons, the seek slider, picker dialogs and cards: layout and hit-testing (pure) plus
+drawing into a `Layer`. Icons and card art are drawn from triangles, circles and bars, never
+from image files."""
 
 from collections.abc import Hashable, Sequence
 from dataclasses import dataclass
+from math import cos, radians, sin
 
+from carla.engine.constants import DevCard, Resource
 from carla.gui import theme
 from carla.gui.controller import Option, Picker
-from carla.gui.geometry import Rect
-from carla.gui.render import Layer
+from carla.gui.geometry import Point, Rect
+from carla.gui.render import Layer, scaled
 from carla.gui.theme import Color
 
 RADIUS = 6
@@ -21,7 +24,7 @@ class Button:
     enabled: bool = True
     hotkey: str = ""
     icon: str = ""
-    """Glyph drawn instead of the label: play, pause, back, forward, start, end, minus, plus."""
+    """Glyph (see `draw_icon`): drawn instead of the label, or above it on a tile button."""
     accent: bool = False
 
 
@@ -58,7 +61,8 @@ def draw_button(layer: Layer, button: Button, hovered: bool = False) -> None:
 
 
 def draw_icon(layer: Layer, icon: str, cx: float, cy: float, size: float, color: Color) -> None:
-    """Playback and stepper glyphs, `size` pixels tall."""
+    """Playback, stepper and action glyphs, `size` pixels tall: play, pause, back, forward,
+    start, end, minus, plus, trade, buy_card, dice, hourglass."""
     h = size / 2
 
     def play(x: float, direction: int = 1) -> None:
@@ -90,6 +94,30 @@ def draw_icon(layer: Layer, icon: str, cx: float, cy: float, size: float, color:
         layer.rect(cx - h, cy - h * 0.16, size, h * 0.32, color)
         if icon == "plus":
             layer.rect(cx - h * 0.16, cy - h, h * 0.32, size, color)
+    elif icon == "trade":  # one arrow each way
+        for d, y in ((1, cy + h * 0.4), (-1, cy - h * 0.4)):
+            neck = cx + h * 0.3 * d
+            layer.line(cx - h * 0.95 * d, y, neck, y, h * 0.26, color)
+            layer.triangle(
+                (neck, y + h * 0.38), (neck, y - h * 0.38), (cx + h * 0.95 * d, y), color
+            )
+    elif icon == "buy_card":  # a card with a plus on it
+        layer.rounded_frame(
+            cx - h * 0.62, cy - h * 0.9, h * 1.24, h * 1.8, h * 0.2, h * 0.16, color
+        )
+        layer.rect(cx - h * 0.4, cy - h * 0.08, h * 0.8, h * 0.16, color)
+        layer.rect(cx - h * 0.08, cy - h * 0.4, h * 0.16, h * 0.8, color)
+    elif icon == "dice":
+        layer.rounded_frame(
+            cx - h * 0.85, cy - h * 0.85, h * 1.7, h * 1.7, h * 0.3, h * 0.15, color
+        )
+        for dx, dy in ((-1, 1), (1, 1), (0, 0), (-1, -1), (1, -1)):
+            layer.circle(cx + dx * h * 0.4, cy + dy * h * 0.4, h * 0.13, color)
+    elif icon == "hourglass":
+        for d in (1, -1):
+            layer.rect(cx - h * 0.62, cy + d * h * 0.82 - h * 0.08, h * 1.24, h * 0.16, color)
+            neck = (cx - h * 0.48, cy + d * h * 0.74), (cx + h * 0.48, cy + d * h * 0.74)
+            layer.triangle(*neck, (cx, cy), color)
 
 
 @dataclass(frozen=True)
@@ -313,3 +341,193 @@ def resource_chip(
     layer.text(
         theme.RESOURCE_INITIALS[resource], cx, cy, size * 0.42, ink, True, "center", "center"
     )
+
+
+# ------------------------------------------------------------------ cards
+
+
+CARD_RATIO = 0.72
+"""Width over height of a card."""
+
+
+@dataclass(frozen=True)
+class Card:
+    """A card of the hand bar: a resource or a development card and how many are held."""
+
+    kind: str
+    """"resource" or "dev"."""
+    index: int
+    """The `Resource` or `DevCard`."""
+    count: int
+    rect: Rect
+    dimmed: bool = False
+    """Development cards bought this turn, which cannot be played yet."""
+    playable: bool = False
+    """A click plays it."""
+
+    @property
+    def label(self) -> str:
+        labels = theme.RESOURCE_LABELS if self.kind == "resource" else theme.DEV_LABELS
+        return labels[self.index]
+
+
+def card_at(cards: Sequence[Card], x: float, y: float) -> Card | None:
+    """The card under the point; the last drawn wins where cards overlap."""
+    return next((c for c in reversed(cards) if c.rect.contains(x, y)), None)
+
+
+def draw_card(layer: Layer, card: Card, hovered: bool = False) -> None:
+    """An upright card with its symbol and a count badge; an empty slot when none is held."""
+    r = card.rect
+    radius = max(3.0, r.w * 0.14)
+    resource = card.kind == "resource"
+    if card.count <= 0:  # keeps the row in place
+        layer.rounded_frame(r.x, r.y, r.w, r.h, radius, 1.5, theme.PANEL_EDGE)
+        if resource:
+            faint = theme.with_alpha(theme.TEXT_DIM, 150)
+            draw_resource_glyph(layer, card.index, r.cx, r.cy, r.w * 0.6, faint)
+        return
+    lift = 4.0 if hovered else 0.0
+    x, y, w, h = r.x, r.y + lift, r.w, r.h
+    if resource:
+        face, ink = theme.TERRAIN[card.index], theme.with_alpha(theme.ink_on(card.index), 235)
+    else:
+        face = theme.CARD_BACK
+        ink = theme.ACCENT if card.index == DevCard.VICTORY_POINT else theme.TEXT
+    if card.dimmed:
+        face, ink = theme.mix(face, theme.PANEL, 0.6), theme.mix(ink, theme.PANEL, 0.55)
+    layer.rounded_rect(x + 2, y - 3, w, h, radius, theme.with_alpha(theme.BLACK, 80))
+    layer.rounded_rect(x, y, w, h, radius, face)
+    edge = theme.mix(face, theme.WHITE, 0.3)
+    layer.rounded_frame(x + 3, y + 3, w - 6, h - 6, max(1.0, radius - 3), 1.2, edge)
+    size = min(w, h) * 0.62
+    if resource:
+        draw_resource_glyph(layer, card.index, x + w / 2, y + h * 0.47, size, ink)
+    else:
+        draw_dev_glyph(layer, card.index, x + w / 2, y + h * 0.47, size, ink, face)
+    if hovered and card.playable:
+        layer.rounded_frame(x, y, w, h, radius, 2, theme.ACCENT)
+    badge = max(7.0, w * 0.19)
+    bx, by = x + badge * 0.55, y + h - badge * 0.55
+    layer.circle(bx, by, badge + 1.5, theme.PANEL_EDGE)
+    layer.circle(bx, by, badge, theme.PANEL)
+    layer.text(str(card.count), bx, by, theme.FONT_SMALL, theme.TEXT, True, "center", "center")
+
+
+def draw_resource_glyph(
+    layer: Layer, resource: int, cx: float, cy: float, size: float, color: Color
+) -> None:
+    """Symbol of a resource in one colour, about `size` pixels tall: a fir tree, bricks, a
+    sheep, an ear of grain, mountains (the board's terrain motifs, simplified)."""
+    s = size
+
+    def p(dx: float, dy: float) -> Point:
+        return cx + dx * s, cy + dy * s
+
+    if resource == Resource.LUMBER:
+        layer.rect(cx - 0.06 * s, cy - 0.5 * s, 0.12 * s, 0.22 * s, color)
+        for base, top, half in ((-0.32, 0.1, 0.36), (-0.1, 0.32, 0.3), (0.12, 0.5, 0.22)):
+            layer.triangle(p(-half, base), p(half, base), p(0, top), color)
+    elif resource == Resource.BRICK:
+        rows = (
+            ((-0.44, -0.02), (0.02, 0.44)),
+            ((-0.44, -0.24), (-0.2, 0.2), (0.24, 0.44)),
+            ((-0.44, -0.02), (0.02, 0.44)),
+        )
+        for i, row in enumerate(rows):
+            for a, b in row:
+                layer.rect(cx + a * s, cy + (-0.42 + 0.3 * i) * s, (b - a) * s, 0.24 * s, color)
+    elif resource == Resource.WOOL:
+        fleece = ((-0.2, 0.02, 0.15), (0.0, 0.1, 0.16), (0.16, 0.03, 0.15))
+        for dx, dy, r in (*fleece, (-0.08, -0.08, 0.14), (0.08, -0.08, 0.14)):
+            layer.circle(*p(dx, dy), r * s, color)
+        layer.circle(*p(0.33, 0.12), 0.11 * s, color)
+        for dx in (-0.16, 0.08):
+            layer.rect(cx + dx * s, cy - 0.42 * s, 0.07 * s, 0.24 * s, color)
+    elif resource == Resource.GRAIN:
+        layer.line(*p(0, -0.5), *p(0, 0.3), 0.06 * s, color)
+        for dy in (-0.22, -0.02, 0.18):
+            for d in (-1, 1):
+                kernel = (p(0, dy), p(0.12 * d, dy + 0.02), p(0.2 * d, dy + 0.16))
+                layer.polygon((*kernel, p(0.06 * d, dy + 0.12)), color)
+        layer.polygon((p(0, 0.28), p(0.07, 0.38), p(0, 0.52), p(-0.07, 0.38)), color)
+    elif resource == Resource.ORE:
+        layer.triangle(p(-0.48, -0.38), p(0.22, -0.38), p(-0.13, 0.4), color)
+        layer.triangle(p(-0.02, -0.38), p(0.48, -0.38), p(0.23, 0.12), color)
+
+
+def draw_dev_glyph(
+    layer: Layer, card: int, cx: float, cy: float, size: float, ink: Color, face: Color
+) -> None:
+    """Symbol of a development card, about `size` pixels tall: a shield (Knight), two roads,
+    two cards and a plus (Year of Plenty), a crown (Monopoly), a star (Victory Point). `face`
+    is the card colour, used to cut details out of the symbol."""
+    s = size
+
+    def p(dx: float, dy: float) -> Point:
+        return cx + dx * s, cy + dy * s
+
+    if card == DevCard.KNIGHT:
+        shield = [p(-0.34, 0.38), p(0.34, 0.38), p(0.34, 0.0), p(0.0, -0.46), p(-0.34, 0.0)]
+        layer.polygon(shield, ink)
+        layer.polygon(scaled(shield, p(0, 0.03), 0.7), face)
+        layer.rect(cx - 0.04 * s, cy - 0.26 * s, 0.08 * s, 0.5 * s, ink)
+        layer.rect(cx - 0.17 * s, cy + 0.06 * s, 0.34 * s, 0.08 * s, ink)
+    elif card == DevCard.ROAD_BUILDING:
+        layer.line(*p(-0.34, -0.36), *p(-0.06, 0.36), 0.15 * s, ink, True)
+        layer.line(*p(0.06, -0.36), *p(0.34, 0.36), 0.15 * s, ink, True)
+    elif card == DevCard.YEAR_OF_PLENTY:
+        layer.rounded_rect(cx - 0.4 * s, cy - 0.32 * s, 0.42 * s, 0.56 * s, 0.07 * s, ink)
+        fx, fy, fw, fh, gap = cx - 0.04 * s, cy - 0.22 * s, 0.42 * s, 0.56 * s, 0.06 * s
+        layer.rounded_rect(fx - gap, fy - gap, fw + 2 * gap, fh + 2 * gap, 0.1 * s, face)
+        layer.rounded_rect(fx, fy, fw, fh, 0.07 * s, ink)
+        mx, my = fx + fw / 2, fy + fh / 2
+        layer.rect(mx - 0.03 * s, my - 0.13 * s, 0.06 * s, 0.26 * s, face)
+        layer.rect(mx - 0.13 * s, my - 0.03 * s, 0.26 * s, 0.06 * s, face)
+    elif card == DevCard.MONOPOLY:
+        layer.rect(cx - 0.38 * s, cy - 0.34 * s, 0.76 * s, 0.16 * s, ink)
+        spikes = ((-0.38, -0.12, -0.3, 0.26), (-0.14, 0.14, 0.0, 0.36), (0.12, 0.38, 0.3, 0.26))
+        for left, right, tip, top in spikes:
+            layer.triangle(p(left, -0.2), p(right, -0.2), p(tip, top), ink)
+            layer.circle(*p(tip, top + 0.04), 0.06 * s, ink)
+    elif card == DevCard.VICTORY_POINT:
+        star = [
+            p(r * cos(radians(90 + 36 * k)), r * sin(radians(90 + 36 * k)))
+            for k, r in enumerate((0.48, 0.2) * 5)
+        ]
+        for a, b in zip(star, (*star[1:], star[0]), strict=True):
+            layer.triangle((cx, cy), a, b, ink)
+
+
+def draw_tile_button(layer: Layer, button: Button, hovered: bool = False) -> None:
+    """A large action button: its icon above its label, the hotkey in the corner."""
+    r = button.rect
+    if not button.enabled:
+        fill, ink = theme.BUTTON_DISABLED, theme.BUTTON_TEXT_DISABLED
+    else:
+        fill, ink = (theme.BUTTON_HOVER if hovered else theme.BUTTON), theme.TEXT
+    layer.rounded_rect(r.x, r.y, r.w, r.h, 8, fill)
+    if button.accent and button.enabled:
+        layer.rounded_frame(r.x, r.y, r.w, r.h, 8, 2, theme.ACCENT)
+    fits = len(button.label) * theme.FONT_SMALL * 1.333 * 0.62 <= r.w - 8
+    labelled = fits and r.h >= 52
+    icon_y = r.cy + (r.h * 0.13 if labelled else 0)
+    draw_icon(layer, button.icon, r.cx, icon_y, min(r.w, r.h) * 0.36, ink)
+    if labelled:
+        layer.text(button.label, r.cx, r.y + 8, theme.FONT_SMALL, ink, True, "center", "bottom")
+    if button.hotkey and r.w >= 48:
+        dim = theme.TEXT_DIM if button.enabled else theme.BUTTON_TEXT_DISABLED
+        x, y = r.right - 6, r.top - 5
+        layer.text(button.hotkey, x, y, theme.FONT_SMALL - 1, dim, False, "right", "top")
+
+
+def draw_tooltip(layer: Layer, text: str, x: float, y: float, bounds: Rect) -> None:
+    """A small label centred above the point (x, y), kept inside `bounds`."""
+    w, h = len(text) * theme.FONT_SMALL * 1.333 * theme.CHAR_WIDTH + 20, 22
+    left = max(bounds.x + 4, min(x - w / 2, bounds.right - w - 4))
+    bottom = y + 6
+    layer.rounded_rect(left + 1, bottom - 2, w, h, 6, theme.with_alpha(theme.BLACK, 90))
+    layer.rounded_rect(left, bottom, w, h, 6, theme.PANEL_RAISED)
+    layer.rounded_frame(left, bottom, w, h, 6, 1, theme.PANEL_EDGE)
+    mid = left + w / 2, bottom + h / 2
+    layer.text(text, *mid, theme.FONT_SMALL, theme.TEXT, False, "center", "center")
