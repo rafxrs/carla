@@ -92,6 +92,9 @@ class Layout:
     board: Rect
     """Whole left column (sea background)."""
     status: Rect
+    """Top strip: mode badge, prompt or notification, help hint."""
+    playback: Rect
+    """Strip under the status: play/pause, steps, the seek slider and the speed."""
     viewport: Rect
     """Where the board itself is fitted."""
     actions: Rect
@@ -104,12 +107,13 @@ def compute_layout(width: float, height: float) -> Layout:
     side_w = min(max(width * 0.3, lo), hi, width / 2)
     board = Rect(0, 0, width - side_w, height)
     status, rest = board.take_top(theme.STATUS_HEIGHT)
-    actions = Rect(0, 0, board.w, min(theme.ACTION_HEIGHT, rest.h))
+    playback, rest = rest.take_top(theme.PLAYBACK_HEIGHT)
+    actions = Rect(0, 0, board.w, min(theme.ACTION_HEIGHT, rest.h / 2))
     viewport = Rect(theme.PAD, actions.top, board.w - 2 * theme.PAD, rest.h - actions.h)
     side_h = min(theme.SIDE_HEIGHT, max(height - theme.LOG_MIN_HEIGHT, height * 0.55))
     side = Rect(board.w, height - side_h, side_w, side_h)
     log = Rect(board.w, 0, side_w, height - side_h)
-    return Layout(width, height, board, status, viewport, actions, side, log)
+    return Layout(width, height, board, status, playback, viewport, actions, side, log)
 
 
 def _port_positions() -> tuple[Point, ...]:

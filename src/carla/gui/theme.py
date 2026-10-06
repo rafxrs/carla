@@ -132,6 +132,7 @@ SIDE_HEIGHT = 520
 """Height the side panel would like; the log gets the rest of the column."""
 LOG_MIN_HEIGHT = 150
 STATUS_HEIGHT = 40
+PLAYBACK_HEIGHT = 40
 ACTION_HEIGHT = 62
 PAD = 10
 FONT = 11

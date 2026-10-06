@@ -11,7 +11,7 @@ from carla.engine.record import GameRecord
 from carla.engine.rng import Rng
 from carla.engine.simulate import play_random_game
 from carla.engine.state import Phase
-from carla.gui.app import KEY_COMMANDS, MOUSE_RIGHT, GuiApp, GuiOptions
+from carla.gui.app import HELP_LINES, KEY_COMMANDS, MOUSE_RIGHT, GuiApp, GuiOptions
 from tests.engine.scenario import give
 
 SETUP = (Phase.SETUP_SETTLEMENT, Phase.SETUP_ROAD)
@@ -313,3 +313,45 @@ def test_gui_imports_and_builds_frames_without_arcade():
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "no arcade"
+
+
+def inside(inner, outer) -> bool:
+    return outer.contains(inner.x, inner.y) and outer.contains(inner.right, inner.top)
+
+
+def overlaps(a, b) -> bool:
+    return a.x < b.right and b.x < a.right and a.y < b.top and b.y < a.top
+
+
+@pytest.mark.parametrize("size", [(1280, 800), (1000, 660), (1600, 1000)])
+@pytest.mark.parametrize("mode", ["play", "watch", "replay"])
+def test_playback_controls_sit_in_the_bar_under_the_status(tmp_path, mode, size):
+    record = GameRecord.from_game(play_random_game(4)).save(tmp_path / "game.json")
+    app = GuiApp(GuiOptions(mode=mode, record=record, delay=0.0))
+    app.on_resize(*size)
+    bar, viewport = app.layout.playback, app.layout.viewport
+    ids = [b.id for b in app.playback_buttons()]
+    assert ids[:5] == ["start", "step_back", "play_pause", "step_forward", "end"]
+    assert {"slower", "faster"} <= set(ids)
+    slider = app.slider()
+    assert slider is not None and slider.rect.w >= 140
+    for rect in (*(b.rect for b in app.playback_buttons()), slider.rect.inset(-6, -10)):
+        assert inside(rect, bar) and not overlaps(rect, viewport)
+    for b in app.action_buttons():
+        assert inside(b.rect, app.layout.actions) and not overlaps(b.rect, viewport)
+    assert any("drag the top bar to seek" in what for _, what in HELP_LINES)
+
+
+def test_seeking_during_live_play_pauses_the_game_until_the_end():
+    app = play_app()
+    play_setup(app)
+    here = app.session.position
+    slider = app.slider()
+    assert slider is not None
+    click(app, (slider.rect.x, slider.rect.cy))  # back to the first position
+    assert app.session.position == 0 and not app.controller.active
+    app.on_update(1.0)
+    assert app.session.position == 0  # nobody moves while the history is shown
+    end = next(b for b in app.playback_buttons() if b.id == "end")
+    click(app, (end.rect.cx, end.rect.cy))
+    assert app.session.position == here and app.controller.active

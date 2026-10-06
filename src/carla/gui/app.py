@@ -96,10 +96,20 @@ MOUSE_LEFT, MOUSE_RIGHT = 1, 4
 PLAY_COMMANDS = ("roll", "end_turn", "buy_dev", "play_dev", "bank_trade", "trade")
 FLASH_SECONDS = 1.6
 MESSAGE_SECONDS = 4.0
+_TRANSPORT = (
+    ("start", "start"),
+    ("step_back", "back"),
+    ("play_pause", ""),
+    ("step_forward", "forward"),
+    ("end", "end"),
+)
+"""Playback buttons (command, icon) at the left of the playback bar; play/pause in the middle."""
+_STEP_W, _STEP_GAP = 34, 4
 _SPEED_LABEL_W = 52
-_CONTROLS_W = 34 + _SPEED_LABEL_W + 34 + 44
-"""Width of the pause and speed controls at the right of the bar."""
+_SPEED_W = 30 + _SPEED_LABEL_W + 30
+"""Width of the slower/faster buttons and the speed label at the right of the playback bar."""
 _COUNTER_W = 100
+_RESULTS_W = 84
 
 HELP_LINES = (
     ("Space", "play / pause (bots, playback)"),
@@ -112,7 +122,7 @@ HELP_LINES = (
     ("Esc", "cancel the dialog, close this help"),
     ("S  /  N", "save the game record / start a new game"),
     ("H", "show or hide this help"),
-    ("Mouse", "click highlighted spots; the wheel scrolls the log; drag the bar to seek"),
+    ("Mouse", "click highlighted spots; the wheel scrolls the log; drag the top bar to seek"),
 )
 
 
@@ -429,60 +439,62 @@ class GuiApp:
     # ------------------------------------------------------------------ widgets
 
     def buttons(self) -> list[Button]:
-        """Buttons of the bar under the board: play buttons (live Play mode) or playback
-        controls, then pause and speed on the right."""
+        """Every clickable button outside dialogs: playback, then the play actions."""
+        return [*self.playback_buttons(), *self.action_buttons()]
+
+    def playback_buttons(self) -> list[Button]:
+        """The playback bar: steps around play/pause on the left, then (after the seek slider)
+        the Results button of a finished game and the speed on the right."""
+        bar, s = self.layout.playback, self.session
+        y, h = bar.cy - 15, 30
+        enabled = {
+            "start": s.position > 0,
+            "step_back": s.position > 0,
+            "play_pause": True,
+            "step_forward": not s.at_end or (s.can_extend and not s.waiting_for_human),
+            "end": not s.at_end,
+        }
+        out = []
+        for i, (command, icon) in enumerate(_TRANSPORT):
+            icon = icon or ("pause" if self.pacer.playing else "play")
+            rect = Rect(bar.x + 10 + i * (_STEP_W + _STEP_GAP), y, _STEP_W, h)
+            out.append(Button(command, command, rect, enabled[command], icon=icon))
+        right = bar.right - 10
+        out.append(Button("faster", "+", Rect(right - 30, y, 30, h), icon="plus"))
+        out.append(Button("slower", "-", Rect(right - _SPEED_W, y, 30, h), icon="minus"))
+        if s.live and s.finished:
+            rect = Rect(right - _SPEED_W - 10 - _RESULTS_W, y, _RESULTS_W, h)
+            out.append(Button("results", "Results", rect))
+        return out
+
+    def action_buttons(self) -> list[Button]:
+        """The human's play buttons along the bottom (live Play mode only)."""
+        if not self.live_play:
+            return []
         bar = self.layout.actions
         y, h = bar.cy - 19, 38
-        right = bar.right - 12
-        out = [
-            Button("faster", "+", Rect(right - 34, y, 34, h), icon="plus"),
-            Button("slower", "-", Rect(right - 68 - _SPEED_LABEL_W, y, 34, h), icon="minus"),
-        ]
-        icon = "pause" if self.pacer.playing else "play"
-        out.append(Button("play_pause", "Play", Rect(right - _CONTROLS_W, y, 38, h), icon=icon))
-        left = bar.x + 12
-        if self.live_play:
-            specs = self.controller.buttons()
-            widths = [len(spec.label) * 7.6 + 38 for spec in specs]
-            room = right - _CONTROLS_W - 16 - left
-            scale = min(1.0, room / (sum(widths) + 8 * (len(widths) - 1)))
-            x = left
-            for spec, w in zip(specs, widths, strict=True):
-                w *= scale
-                accent = spec.id == "roll" and spec.enabled
-                out.append(
-                    Button(
-                        spec.id,
-                        spec.label,
-                        Rect(x, y, w, h),
-                        spec.enabled,
-                        spec.hotkey,
-                        accent=accent,
-                    )
-                )
-                x += w + 8 * scale
-            return out
-        s = self.session
-        icons = ("start", "step_back", "step_forward", "end")
-        glyphs = ("start", "back", "forward", "end")
-        for i, (command, glyph) in enumerate(zip(icons, glyphs, strict=True)):
-            enabled = s.position > 0 if i < 2 else (not s.at_end or s.can_extend)
-            out.append(Button(command, command, Rect(left + i * 44, y, 38, h), enabled, icon=glyph))
-        if s.live and s.finished:
-            out.append(Button("results", "Results", Rect(right - _CONTROLS_W - 100, y, 90, h)))
+        left, right = bar.x + 12, bar.right - 12
+        specs = self.controller.buttons()
+        widths = [len(spec.label) * 7.6 + 38 for spec in specs]
+        scale = min(1.0, (right - left) / (sum(widths) + 8 * (len(widths) - 1)))
+        out, x = [], left
+        for spec, w in zip(specs, widths, strict=True):
+            w *= scale
+            accent = spec.id == "roll" and spec.enabled
+            rect = Rect(x, y, w, h)
+            out.append(Button(spec.id, spec.label, rect, spec.enabled, spec.hotkey, accent=accent))
+            x += w + 8 * scale
         return out
 
     def slider(self) -> Slider | None:
-        if self.live_play:
-            return None
-        bar = self.layout.actions
-        left = bar.x + 12 + 4 * 44 + 10
-        right = bar.right - 12 - _CONTROLS_W - _COUNTER_W
-        if self.session.live and self.session.finished:
-            right -= 100  # the Results button
+        """The seek bar between the steps and the speed, if the window leaves room for it."""
+        bar, s = self.layout.playback, self.session
+        left = bar.x + 10 + len(_TRANSPORT) * (_STEP_W + _STEP_GAP) + 10
+        right = bar.right - 10 - _SPEED_W - _COUNTER_W
+        if s.live and s.finished:
+            right -= _RESULTS_W + 10
         if right - left < 60:
             return None
-        s = self.session
         return Slider(Rect(left, bar.cy - 10, right - left, 20), s.position, s.length)
 
     def picker_layout(self) -> PickerLayout | None:
@@ -559,7 +571,8 @@ class GuiApp:
         ]
         ui = Layer("ui")
         draw_status(ui, layout.status, *self.status(), "H: help")
-        self._draw_bar(ui)
+        self._draw_playback(ui)
+        self._draw_actions(ui)
         draw_side_panel(ui, layout.side, panel_view(s))
         self.log_view.draw(ui, layout.log, s)
         layers.append(ui)
@@ -571,11 +584,12 @@ class GuiApp:
             layers.append(self._help_layer())
         return layers
 
-    def _draw_bar(self, layer: Layer) -> None:
-        bar = self.layout.actions
+    def _draw_playback(self, layer: Layer) -> None:
+        bar = self.layout.playback
         layer.rect(bar.x, bar.y, bar.w, bar.h, theme.with_alpha(theme.BACKGROUND, 150))
+        layer.rect(bar.x, bar.top - 1, bar.w, 1, theme.with_alpha(theme.PANEL_EDGE, 160))
         x, y = self.mouse
-        buttons = self.buttons()
+        buttons = self.playback_buttons()
         for b in buttons:
             draw_button(layer, b, b.rect.contains(x, y) and b.enabled)
         slower = next(b for b in buttons if b.id == "slower")
@@ -586,9 +600,15 @@ class GuiApp:
         if slider is not None:
             draw_slider(layer, slider, slider.rect.inset(-6, -10).contains(x, y) or self._dragging)
             count, x_count = f"{slider.value} / {slider.maximum}", slider.rect.right + 14
-            layer.text(
-                count, x_count, bar.cy, theme.FONT, theme.TEXT_MUTED, False, "left", "center"
-            )
+            muted = theme.TEXT_MUTED
+            layer.text(count, x_count, bar.cy, theme.FONT, muted, False, "left", "center")
+
+    def _draw_actions(self, layer: Layer) -> None:
+        bar = self.layout.actions
+        layer.rect(bar.x, bar.y, bar.w, bar.h, theme.with_alpha(theme.BACKGROUND, 150))
+        x, y = self.mouse
+        for b in self.action_buttons():
+            draw_button(layer, b, b.rect.contains(x, y) and b.enabled)
 
     def _picker_layer(self) -> Layer:
         layer = Layer("picker")
