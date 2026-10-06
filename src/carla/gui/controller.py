@@ -209,6 +209,20 @@ class Controller:
             return self._by_type[_SIMPLE[button]][0]
         return None
 
+    def playable_cards(self) -> frozenset[int]:
+        """Development cards a click would play now (none while a mandatory picker is open)."""
+        if self.picker is not None and not self.picker.cancellable:
+            return frozenset()
+        return frozenset(int(a.dev) for a in self._by_type.get(_T.PLAY_DEV_CARD, ()))
+
+    def play_card(self, card: int) -> Action | None:
+        """Play development card `card` as if picked in the Play dev card picker: Year of Plenty
+        and Monopoly then ask for their resources."""
+        if card not in self.playable_cards():
+            return None
+        self.press("play_dev")
+        return self.choose(card)
+
     def choose(self, key: Hashable) -> Action | None:
         """Pick the option `key` of the open picker."""
         picker = self.picker

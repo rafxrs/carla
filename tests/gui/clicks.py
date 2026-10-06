@@ -43,6 +43,13 @@ def script_for(action: Action, legal: Sequence[Action]) -> Script:
     raise ValueError(f"no click script for {action}")
 
 
+def card_script_for(action: Action) -> Script:
+    """The same development card play started by clicking the card in the hand bar."""
+    assert action.type == _T.PLAY_DEV_CARD
+    picks = script_for(action, (action,))[2:]  # the resources asked after the card
+    return [("play_card", action.dev), *picks]
+
+
 def drive(controller: Controller, script: Script) -> Action | None:
     """Run `script`; every call but the last must leave the action incomplete."""
     result = None

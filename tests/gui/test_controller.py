@@ -7,7 +7,7 @@ from carla.engine.state import Phase
 from carla.engine.topology import EDGE_CORNERS, PORT_CORNERS, TILE_CORNERS
 from carla.gui.controller import Controller
 from tests.engine.scenario import BOARD, give, give_dev, post_setup_game, put_settlement
-from tests.gui.clicks import drive, script_for
+from tests.gui.clicks import card_script_for, drive, script_for
 
 
 def controller_for(game: Game, domestic_trade: bool = False) -> Controller:
@@ -22,6 +22,10 @@ def check_every_action(game: Game) -> set[ActionType]:
     for action in legal:
         controller = controller_for(game)
         assert drive(controller, script_for(action, legal)) == action
+        if action.type == ActionType.PLAY_DEV_CARD:  # or by clicking the card itself
+            controller = controller_for(game)
+            assert action.dev in controller.playable_cards()
+            assert drive(controller, card_script_for(action)) == action
     return {a.type for a in legal}
 
 
@@ -279,3 +283,42 @@ def test_trade_button_needs_the_main_phase():
     controller = Controller(0, domestic_trade=True)
     controller.reset(game.state, game.legal_actions())
     assert not next(b for b in controller.buttons() if b.id == "trade").enabled
+
+
+def test_clicking_a_development_card_plays_it_like_the_picker():
+    game = post_setup_game()
+    for card in DevCard:
+        give_dev(game, 0, card)
+    put_settlement(game, 0, 20)
+    controller = controller_for(game)
+    assert controller.playable_cards() == {0, 1, 2, 3}  # victory points are never played
+    assert controller.play_card(DevCard.KNIGHT) is A.PLAY_KNIGHT
+    assert controller.play_card(DevCard.YEAR_OF_PLENTY) is None
+    picker = controller.picker
+    assert picker is not None and picker.kind == "plenty"
+    assert controller.choose(0) is None and controller.choose(4) is A.YEAR_OF_PLENTY[0][4]
+    assert controller.play_card(DevCard.MONOPOLY) is None
+    assert controller.picker is not None and controller.picker.kind == "monopoly"
+    assert controller.play_card(DevCard.VICTORY_POINT) is None
+    assert controller.picker is not None and controller.picker.kind == "monopoly"  # unchanged
+
+
+def test_cards_bought_this_turn_or_a_mandatory_picker_block_card_clicks():
+    game = post_setup_game()
+    give_dev(game, 0, DevCard.KNIGHT)
+    game.state.dev_bought_this_turn[DevCard.KNIGHT] = 1
+    game.set_state(game.state)
+    controller = controller_for(game)
+    assert controller.playable_cards() == frozenset()
+    assert controller.play_card(DevCard.KNIGHT) is None and controller.picker is None
+    idle = Controller(seat=0)
+    idle.reset(None)
+    assert idle.playable_cards() == frozenset() and idle.play_card(DevCard.KNIGHT) is None
+    roller = post_setup_game(rolled=False)
+    give(roller, 0, (3, 0, 2, 2, 2))
+    give_dev(roller, 0, DevCard.KNIGHT)
+    roller.step(A.ROLL, outcome=(3, 4))  # a 7 with nine cards: discard first
+    discarding = controller_for(roller)
+    assert discarding.picker is not None and discarding.picker.kind == "discard"
+    assert discarding.playable_cards() == frozenset()
+    assert discarding.play_card(DevCard.KNIGHT) is None
