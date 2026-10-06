@@ -20,7 +20,8 @@ class EngineConfig:
     board_seed: int | None = None
     """Use the same board in every game (generated from this seed) instead of one per game seed."""
     forbid_adjacent_red_numbers: bool = True
-    """Re-deal number tokens until no two 6/8 tokens sit on neighbouring tiles."""
+    """Lay number tokens as in the official variable set-up (no neighbouring 6/8, equal numbers or
+    2/12); False shuffles them freely."""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

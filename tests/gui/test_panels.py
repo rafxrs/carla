@@ -65,7 +65,11 @@ def test_titles_follow_the_game():
     assert panel_view(s).title == "Game over" and panel_view(s).phase.startswith(f"P{game.winner}")
     s.seek(0)
     assert panel_view(s).title == "Setup"
-    s.seek(next(i for i, step in enumerate(game.history) if step.action.type.name == "DISCARD"))
+    discards = [i for i, step in enumerate(game.history) if step.action.type.name == "DISCARD"]
+    for i in discards:  # a seat other than the roller discarding
+        s.seek(i)
+        if s.game.decision_player != s.game.current_player:
+            break
     view = panel_view(s)
     assert s.game.phase == Phase.DISCARD and "to act" in view.phase
     assert any(p.deciding and not p.current for p in view.players)

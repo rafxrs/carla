@@ -5,7 +5,8 @@ pointy-top in axial coordinates (q, r) with radius 2. Geometry (`*_XY`) is only 
 models must use the adjacency tables, which are invariant to board rotation/reflection.
 """
 
-from math import sqrt
+from itertools import pairwise
+from math import atan2, sqrt, tau
 
 NUM_TILES = 19
 NUM_CORNERS = 54
@@ -146,6 +147,36 @@ EDGE_XY: tuple[tuple[float, float], ...] = tuple(
     for a, b in EDGE_CORNERS
 )
 
+
+def _spirals() -> tuple[tuple[int, ...], ...]:
+    def ring(t: int) -> int:
+        q, r = TILE_AXIAL[t]
+        return max(abs(q), abs(r), abs(q + r))
+
+    def around(tiles: list[int], start: int) -> list[int]:
+        # Counterclockwise as drawn (y up), beginning with `start`.
+        def turn(t: int) -> float:
+            (x, y), (sx, sy) = TILE_XY[t], TILE_XY[start]
+            return (atan2(-y, x) - atan2(-sy, sx)) % tau
+
+        return sorted(tiles, key=turn)
+
+    coast = [t for t in range(NUM_TILES) if ring(t) == 2]
+    inner = [t for t in range(NUM_TILES) if ring(t) == 1]
+    centre = TILE_AXIAL.index((0, 0))
+    spirals = []
+    for corner in (t for t in coast if len(TILE_NEIGHBORS[t]) == 3):
+        next_to_corner = next(t for t in TILE_NEIGHBORS[corner] if ring(t) == 1)
+        spirals.append((*around(coast, corner), *around(inner, next_to_corner), centre))
+    return tuple(spirals)
+
+
+TILE_SPIRALS: tuple[tuple[int, ...], ...] = _spirals()
+"""Order in which the official variable set-up lays the number tokens, one spiral per corner
+tile of the coast: counterclockwise round the coast, round the inner ring from the tile next to
+that corner, then the centre."""
+
 assert (len(TILE_AXIAL), len(CORNER_XY), len(EDGE_CORNERS)) == (19, 54, 72)
 assert len(COAST_EDGES) == 30 and len(PORT_EDGES) == NUM_PORTS
+assert all(b in TILE_NEIGHBORS[a] for s in TILE_SPIRALS for a, b in pairwise(s))
 del _T

@@ -56,7 +56,9 @@ TERRAIN_COUNTS = {
     Resource.ORE: 3,
     DESERT: 1,
 }
-NUMBER_TOKENS = (2, 3, 3, 4, 4, 5, 5, 6, 6, 8, 8, 9, 9, 10, 10, 11, 11, 12)
+NUMBER_TOKENS_BY_LETTER = (5, 2, 6, 3, 8, 10, 9, 12, 11, 4, 8, 10, 9, 4, 5, 6, 3, 11)
+"""Number on each token, in the order of the letters A to R on their backs (OEIS A054863)."""
+NUMBER_TOKENS = tuple(sorted(NUMBER_TOKENS_BY_LETTER))
 PORT_TYPES = (GENERIC_PORT,) * 4 + tuple(Resource)
 
 SETTLEMENTS_PER_PLAYER = 5

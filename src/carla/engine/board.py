@@ -7,6 +7,7 @@ from carla.engine.constants import (
     DESERT,
     GENERIC_PORT,
     NUMBER_TOKENS,
+    NUMBER_TOKENS_BY_LETTER,
     PORT_TYPES,
     RESOURCE_NAMES,
     TERRAIN_COUNTS,
@@ -19,10 +20,8 @@ from carla.engine.topology import (
     NUM_PORTS,
     NUM_TILES,
     PORT_CORNERS,
-    TILE_NEIGHBORS,
+    TILE_SPIRALS,
 )
-
-_RED_NUMBERS = (6, 8)
 
 
 @dataclass(frozen=True)
@@ -66,18 +65,28 @@ class Board:
 
     @classmethod
     def random(cls, rng: Rng, forbid_adjacent_red: bool = True) -> "Board":
-        """Shuffle terrain, ports and number tokens (optionally keeping 6s and 8s apart)."""
+        """Shuffle terrain and ports, then lay the number tokens.
+
+        By default the tokens follow the official variable set-up: in letter order along the
+        spiral from a random corner of the coast to the centre, skipping the desert. Such boards
+        never put 6s and 8s, equal numbers, or 2 and 12 on neighbouring tiles. With
+        `forbid_adjacent_red=False` the tokens are shuffled freely instead.
+        """
         terrain = [r for r, count in TERRAIN_COUNTS.items() for _ in range(count)]
         rng.shuffle(terrain)
         ports = list(PORT_TYPES)
         rng.shuffle(ports)
-        tokens = list(NUMBER_TOKENS)
-        while True:
+        if forbid_adjacent_red:
+            path = [t for t in rng.choice(TILE_SPIRALS) if terrain[t] != DESERT]
+            numbers = [0] * NUM_TILES
+            for t, number in zip(path, NUMBER_TOKENS_BY_LETTER, strict=True):
+                numbers[t] = number
+        else:
+            tokens = list(NUMBER_TOKENS)
             rng.shuffle(tokens)
             it = iter(tokens)
-            numbers = tuple(0 if r == DESERT else next(it) for r in terrain)
-            if not forbid_adjacent_red or not _adjacent_red(numbers):
-                return cls(tuple(terrain), numbers, tuple(ports))
+            numbers = [0 if r == DESERT else next(it) for r in terrain]
+        return cls(tuple(terrain), tuple(numbers), tuple(ports))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -109,11 +118,3 @@ class Board:
 
 def describe_port(kind: int) -> str:
     return "3:1 port" if kind == GENERIC_PORT else f"2:1 {RESOURCE_NAMES[kind]} port"
-
-
-def _adjacent_red(numbers: tuple[int, ...]) -> bool:
-    return any(
-        numbers[t] in _RED_NUMBERS and numbers[u] in _RED_NUMBERS
-        for t in range(NUM_TILES)
-        for u in TILE_NEIGHBORS[t]
-    )
