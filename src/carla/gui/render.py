@@ -205,41 +205,47 @@ class _TextBatch:
 
     Labels are keyed by content and style (not position), so moving text only updates it; labels
     not drawn in a frame are hidden, and deleted after a while.
+
+    On high-DPI screens glyphs are rasterised at `scale` (the window's pixel ratio) and placed on
+    whole physical pixels, then drawn under a 1/scale view: text stays as crisp as the screen.
     """
 
     EXPIRY = 600
 
-    def __init__(self) -> None:
+    def __init__(self, scale: float = 1.0) -> None:
         import pyglet
 
         self.batch = pyglet.graphics.Batch()
         self.labels: dict[tuple, _Label] = {}
+        self.scale = scale
 
     def draw(self, items: Iterable[TextItem], frame: int) -> None:
         import arcade
 
+        k = self.scale
         count: dict[tuple, int] = {}
         for item in items:
             style = (item.text, item.size, item.color, item.bold, item.anchor_x, item.anchor_y)
             n = count[style] = count.get(style, -1) + 1
             entry = self.labels.get((style, n))
+            x, y = round(item.x * k), round(item.y * k)
             if entry is None:
                 label = arcade.Text(
                     item.text,
-                    item.x,
-                    item.y,
+                    x,
+                    y,
                     item.color,
-                    item.size,
+                    item.size * k,
                     bold=item.bold,
                     anchor_x=item.anchor_x,
                     anchor_y=item.anchor_y,
                     batch=self.batch,
                 )
-                self.labels[(style, n)] = _Label(label, frame, item.x, item.y)
+                self.labels[(style, n)] = _Label(label, frame, x, y)
                 continue
-            if (entry.x, entry.y) != (item.x, item.y):
-                entry.x, entry.y = item.x, item.y
-                entry.label.position = item.x, item.y
+            if (entry.x, entry.y) != (x, y):
+                entry.x, entry.y = x, y
+                entry.label.position = x, y
             if not entry.visible:
                 entry.label.visible = entry.visible = True
             entry.used = frame
@@ -250,7 +256,18 @@ class _TextBatch:
                 if frame - entry.used > self.EXPIRY:
                     entry.label.label.delete()
                     del self.labels[key]
-        self.batch.draw()
+        if k == 1:
+            self.batch.draw()
+            return
+        from pyglet.math import Mat4, Vec3
+
+        window = arcade.get_window()
+        view = window.view
+        window.view = view @ Mat4.from_scale(Vec3(1 / k, 1 / k, 1))
+        try:
+            self.batch.draw()
+        finally:
+            window.view = view
 
 
 class Painter:
@@ -266,15 +283,23 @@ class Painter:
         self._texts: dict[str, _TextBatch] = {}
         self.frame = 0
 
+    def pixel_ratio(self) -> float:
+        import arcade
+
+        return arcade.get_window().get_pixel_ratio() or 1.0
+
     def draw(self, layers: Sequence[Layer]) -> None:
         self.frame += 1
+        ratio = self.pixel_ratio()
+        if any(batch.scale != ratio for batch in self._texts.values()):
+            self._texts = {}  # moved to a screen with another scale: rasterise again
         names = set()
         for layer in layers:
             names.add(layer.name)
             self._draw_mesh(layer)
             batch = self._texts.get(layer.name)
             if batch is None:
-                batch = self._texts[layer.name] = _TextBatch()
+                batch = self._texts[layer.name] = _TextBatch(ratio)
             batch.draw(layer.texts, self.frame)
         for name, batch in self._texts.items():
             if name not in names:  # hide the text of layers missing from this frame
