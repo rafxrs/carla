@@ -3,20 +3,23 @@
 A powerful Deep RL catan agent.
 All code (game engine, RL, GUI, tests, etc.) was written from scratch and is intellectual property of Rafael Reis, Lucas Bessai, Suraj Vadulas and Dan Suissa.
 
-CARLA learns full 4-player Settlers of Catan by self-play PPO on top of its own deterministic rules engine (ECSE 552 course project, McGill).
+CARLA is being built to learn four-player Settlers of Catan by self-play PPO on top of its own deterministic rules engine (ECSE 552 course project, McGill).
 
 ## Status
 
 | Module    | Workstream | State                                                                                                                                                                                                                                                                                                             |
 | --------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `engine/` | engine     | **Done, tested.** Full base rules: setup, production with bank shortage, discards and robber, building, maritime trade, all development cards, Longest Road with cuts, Largest Army, victory. Also legal-action enumeration, snapshot/restore, seeded replay, JSON and text logs. Domestic trade: interface only. |
+| `engine/` | engine     | **Implemented.** Base rules, maritime trade, and domestic proposals, invitations, counteroffers, confirmation, configurable limits, snapshots, deterministic replay, and logs. Larger offers are validated when submitted. |
 | `config/` | shared     | **Done.** Typed dataclasses, YAML `extends`, dotted overrides, strict validation.                                                                                                                                                                                                                                 |
-| `envs/`   | RL         | **Working v0.** Factored action heads and masks, observation encoder, rewards, self-play env, Gymnasium env.                                                                                                                                                                                                      |
-| `agents/` | eval/bots  | **Working v0.** Random bot and greedy heuristic bot (wins 100% against random).                                                                                                                                                                                                                                   |
-| `eval/`   | eval/bots  | **Working.** Seeded tournaments with seat rotation and Wilson CIs, multi-process. Plots and trade metrics: TODO.                                                                                                                                                                                                  |
-| `models/` | models     | Masked factored distribution and MLP baseline **done**. GNN, set attention, belief module, trade decoder: **interfaces + TODOs**.                                                                                                                                                                                 |
+| `envs/`   | RL         | **Working v0.** Factored action heads and masks, including one-for-one offers, public trade context, rewards, self-play env, Gymnasium env. |
+| `agents/` | eval/bots  | **Working v0.** Random and heuristic bots, including domestic proposals and counteroffers when enabled. |
+| `eval/`   | eval/bots  | **Working.** Seeded tournaments with seat rotation and Wilson CIs, multi-process. Recorded games support trade feasibility, acceptance, and execution metrics. Plots: TODO. |
+| `models/` | models     | Masked factored distribution and MLP baseline handle one-for-one offers. GNN, set attention, belief module, and variable-length trade decoder remain TODOs. |
 | `rl/`     | RL         | GAE, rollout collection, checkpoints, `carla train` dry run **done**. PPO update, async workers, opponent pool: **interfaces + TODOs**.                                                                                                                                                                           |
-| `gui/`    | GUI        | **Implemented.** Arcade: play a seat against bots (setup, building, robber, development cards, bank trade, discards), watch live bot games, replay records with play/pause, step, seek and speed. Procedural art only; press H for the shortcuts.                                                                 |
+| `gui/`    | GUI        | **Implemented.** Arcade play, watch, and replay modes. With domestic trading enabled, humans can compose multi-card offers, invite offers, counter, and confirm exchanges. |
+
+The domestic trade protocol, defaults, and extension points are documented in
+[docs/domestic_trading.md](docs/domestic_trading.md).
 
 ## Setup
 
@@ -24,13 +27,13 @@ Python 3.11+. With [uv](https://docs.astral.sh/uv/) (recommended):
 
 ```bash
 pip install uv
-uv sync --extra cpu --extra dev     # or --extra cu130 for the RTX 50xx workstation
+uv sync --extra cpu --extra dev --extra gui     # or --extra cu130 for the RTX 50xx workstation
 source .venv/bin/activate           # Linux/macOS (or prefix commands with `uv run`)
 .venv\Scripts\Activate.ps1          # Windows PowerShell
 pre-commit install                  # ruff + black on every commit
 ```
 
-Commit the `uv.lock` created by the first `uv sync`, so everyone runs identical versions. Plain pip + venv or pip + conda also works: install torch from pytorch.org, then run `pip install -e ".[dev]"`. Add the `gui` extra for Arcade.
+The committed `uv.lock` pins shared versions. Plain pip + venv or pip + conda also works: install torch from pytorch.org, then run `pip install -e ".[dev,gui]"`.
 
 ## Commands
 
@@ -38,11 +41,13 @@ Commit the `uv.lock` created by the first `uv sync`, so everyone runs identical 
 pytest -n auto                       # all tests; -m "not slow" skips the 200-game sweep
 ruff check . && black --check .
 carla simulate --games 5 --agents heuristic random random random --save runs/games
+carla simulate --games 5 --agents heuristic random random random --config configs/experiments/domestic_trade.yaml --save runs/trades
 carla replay runs/games/game_0000.json.gz --step 120   # position after line #120 of game_0000.txt
 carla tournament --config configs/bots.yaml            # win rates with 95% CIs
 carla config configs/experiments/gnn.yaml model.belief=gru   # print a resolved config
 carla train configs/smoke.yaml       # dry run until the PPO update lands
 carla gui --play --seat 0 --opponents heuristic   # needs the gui extra; H shows the shortcuts
+carla gui --play --seat 0 --config configs/experiments/domestic_trade.yaml
 carla gui --watch --opponents heuristic,random    # a live bot game with play/pause/step/seek
 carla gui runs/games/game_0000.json.gz            # replay a record
 python scripts/benchmark_engine.py
@@ -154,7 +159,7 @@ stateDiagram-v2
 - **Reproducibility.** Every run is one config file plus dotted overrides. `carla train` saves the resolved config and the git commit in its run directory. Derive every seed with `derive_seed(config.seed, ...)`.
 - **Seats.** The engine uses absolute seats 0-3. Envs and models use seats relative to the actor.
 - **Tests.** Every rule change comes with a test. `tests/engine/scenario.py` builds hand-made positions and checks every invariant.
-- **Docs.** This README is the only documentation file; docstrings stay short.
+- **Docs.** This README covers the overall architecture; focused protocols live in `docs/`.
 
 ## Design decisions
 

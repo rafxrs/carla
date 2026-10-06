@@ -1,4 +1,4 @@
-# Everything on, including domestic trading (engine support pending).
+# Planned advanced model stack. The GNN, belief module, and trade decoder are still TODOs.
 extends: gnn_attention_belief.yaml
 name: full_trade
 engine:

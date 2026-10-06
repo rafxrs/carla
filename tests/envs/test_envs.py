@@ -2,8 +2,10 @@ import itertools
 
 import numpy as np
 import pytest
+from gymnasium.utils.passive_env_checker import env_reset_passive_checker, env_step_passive_checker
 
 from carla.config.schema import EnvConfig
+from carla.engine import actions as A
 from carla.engine.config import EngineConfig
 from carla.engine.game import Game, IllegalActionError
 from carla.engine.rng import Rng
@@ -18,6 +20,8 @@ from carla.envs import (
     sample_heads,
 )
 from carla.envs.action_space import HEAD_INDEX, HEAD_SIZES, heads_used
+from carla.envs.observation import TRADE_BASE_FEATURES
+from tests.engine.scenario import give, post_setup_game
 
 
 def all_mask_decisions(masks, actor):
@@ -46,6 +50,8 @@ def mask_allows(masks, h) -> bool:
         7: lambda: masks["robber"][tile, player],
         8: lambda: masks["discard"][r1],
         9: lambda: masks["maritime"][r1, r2],
+        10: lambda: masks["trade"][r1, r2],
+        13: lambda: masks["partner"][player],
     }
     if t in checks:
         return bool(checks[t]())
@@ -73,6 +79,55 @@ def test_masks_describe_exactly_the_legal_actions(seed):
         game.step(rng.choice(legal))
 
 
+def test_trade_masks_cover_the_baseline_offers_and_responses():
+    game = post_setup_game(config=EngineConfig(allow_domestic_trade=True))
+    give(game, 0, (1, 0, 0, 0, 0))
+    give(game, 1, (0, 1, 0, 0, 0))
+    legal = game.legal_actions()
+    masks = build_masks(legal, game.decision_player)
+    assert all_mask_decisions(masks, game.decision_player) == set(legal)
+    assert masks["trade"][0, 1] and not masks["trade"][0, 0]
+    larger = A.Action(
+        A.ActionType.PROPOSE_TRADE,
+        trade=A.TradeOffer((1, 0, 0, 0, 0), (0, 2, 0, 0, 0)),
+    )
+    assert game.is_legal(larger)
+    with pytest.raises(ValueError, match="one-for-one"):
+        build_masks((larger,), 0)
+    with pytest.raises(ValueError, match="one-for-one"):
+        encode_action(larger, 0)
+    game.step(A.ONE_FOR_ONE[0][1])
+    obs = ObservationEncoder().encode(game, 0)
+    assert obs["trade_context"][0] == obs["trade_context"][6] == 0.25
+    assert not obs["masks"]["type"].any()  # the proposer is waiting for responses
+    responder_masks = build_masks(game.legal_actions(), game.decision_player)
+    assert responder_masks["type"][A.ActionType.ACCEPT_TRADE]
+    game.step(A.ACCEPT_TRADE)
+    game.step(A.REJECT_TRADE)
+    game.step(A.REJECT_TRADE)
+    confirm_masks = build_masks(game.legal_actions(), game.decision_player)
+    assert all_mask_decisions(confirm_masks, game.decision_player) == set(game.legal_actions())
+
+
+def test_invitation_and_counteroffer_masks_and_public_observation():
+    game = post_setup_game(config=EngineConfig(allow_domestic_trade=True))
+    give(game, 0, (1, 0, 0, 0, 0))
+    give(game, 1, (0, 1, 0, 0, 0))
+    masks = build_masks(game.legal_actions(), 0)
+    assert masks["type"][A.ActionType.INVITE_TRADE]
+    game.step(A.INVITE_TRADE)
+    legal = game.legal_actions()
+    responder_masks = build_masks(legal, 1)
+    assert responder_masks["type"][A.ActionType.PROPOSE_TRADE]
+    assert not responder_masks["type"][A.ActionType.ACCEPT_TRADE]
+    assert all_mask_decisions(responder_masks, 1) == set(legal)
+    game.step(A.ONE_FOR_ONE[1][0])
+    obs = ObservationEncoder().encode(game, 0)
+    start = TRADE_BASE_FEATURES + 2 * 5  # responder seat 1 relative to observer seat 0
+    assert obs["trade_context"][start + 1] == 0.25
+    assert obs["trade_context"][start + 5] == 0.25
+
+
 def run_episode(env, seed, sampler_seed):
     rng = np.random.default_rng(sampler_seed)
     obs, info = env.reset(seed=seed)
@@ -96,6 +151,26 @@ def test_gym_env_plays_full_episodes():
         assert total == (1.0 if info["winner"] == env.learner else -1.0)
     with pytest.raises(RuntimeError):
         env.step(np.zeros(len(HEAD_NAMES), dtype=int))
+
+
+@pytest.mark.parametrize("allow_trade", [False, True])
+def test_gym_action_space_samples_current_legal_actions(allow_trade):
+    env = CatanEnv(EngineConfig(allow_domestic_trade=allow_trade, max_turns=12))
+    _, info = env.reset(seed=13)
+    while not env.game.is_over:
+        action = env.action_space.sample()
+        assert env.action_space.contains(action)
+        assert decode_action(action, env.learner) in info["legal_actions"]
+        _, _, terminated, truncated, info = env.step(action)
+        if terminated or truncated:
+            break
+
+
+@pytest.mark.parametrize("allow_trade", [False, True])
+def test_gymnasium_passive_api_checker(allow_trade):
+    env = CatanEnv(EngineConfig(allow_domestic_trade=allow_trade))
+    env_reset_passive_checker(env)
+    env_step_passive_checker(env, env.action_space.sample())
 
 
 def test_gym_env_is_reproducible():

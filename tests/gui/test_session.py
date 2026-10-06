@@ -2,6 +2,7 @@ import pytest
 
 from carla.agents import make_agent
 from carla.engine import actions as A
+from carla.engine.actions import Action, ActionType, TradeOffer
 from carla.engine.config import EngineConfig
 from carla.engine.events import EventKind
 from carla.engine.game import Game, IllegalActionError
@@ -12,7 +13,23 @@ from carla.engine.text import describe_event
 from carla.eval.runner import play_game
 from carla.gui.controller import Controller
 from carla.gui.session import GameSession, HumanAgent, Pacer
+from tests.engine.scenario import give, post_setup_game
 from tests.gui.clicks import drive, script_for
+
+
+def test_human_can_submit_a_multi_card_trade():
+    game = post_setup_game(config=EngineConfig(allow_domestic_trade=True))
+    give(game, 0, (2, 0, 0, 0, 0))
+    offer = Action(
+        ActionType.PROPOSE_TRADE,
+        trade=TradeOffer((2, 0, 0, 0, 0), (0, 1, 0, 0, 0)),
+    )
+    assert offer not in game.legal_actions() and game.is_legal(offer)
+    human = HumanAgent()
+    human.submit(offer)
+    assert human.act(game, 0, game.legal_actions()) == offer
+    game.step(offer)
+    assert game.state.pending_trade == offer.trade
 
 
 @pytest.fixture(scope="module")

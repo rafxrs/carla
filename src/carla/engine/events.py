@@ -25,7 +25,12 @@ class EventKind(IntEnum):
     LARGEST_ARMY_CHANGED   player=new holder, target=previous holder or -1
     TURN_ENDED             player
     GAME_OVER              player=winner, or -1 when truncated
-    TRADE_*                reserved for domestic trade (not implemented yet)
+    TRADE_PROPOSED         player, give/receive=public offer
+    TRADE_RESPONDED        player=responder, target=proposer, value=1 accept or 0 reject
+    TRADE_EXECUTED         player=proposer, target=partner, give/receive=exchanged cards
+    TRADE_CANCELLED        player=proposer
+    TRADE_INVITED          player=active player, asking others to propose terms
+    TRADE_COUNTERED        player=responder, target=active player, give/receive from responder
     """
 
     DICE_ROLLED = 0
@@ -50,6 +55,8 @@ class EventKind(IntEnum):
     TRADE_RESPONDED = 19
     TRADE_EXECUTED = 20
     TRADE_CANCELLED = 21
+    TRADE_INVITED = 22
+    TRADE_COUNTERED = 23
 
 
 NUM_EVENT_KINDS = len(EventKind)
@@ -65,6 +72,8 @@ class Event(NamedTuple):
     value: int = -1
     location: int = -1
     counts: tuple[int, ...] = ()
+    give: tuple[int, ...] = ()
+    receive: tuple[int, ...] = ()
 
     def visible_to(self, viewer: int) -> "Event":
         """The event as seen by seat `viewer` (hidden values replaced by -1)."""

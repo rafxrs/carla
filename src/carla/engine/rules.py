@@ -3,13 +3,16 @@
 `legal_actions` enumerates every legal decision; `apply_action` performs one (mutating the state)
 and returns the broadcast events. Neither validates its input: `Game` does that.
 
-Domestic trade (TODO, gated by `EngineConfig.allow_domestic_trade`). Intended protocol:
-  1. MAIN: the current player may PROPOSE_TRADE(offer) up to `max_trade_proposals_per_turn` times.
-     Offers are validated, not enumerated (give <= own hand, give/receive disjoint and non-empty).
-  2. TRADE_RESPONSE: every other seat, in turn order, answers ACCEPT_TRADE (only if it can pay
-     `offer.receive`) or REJECT_TRADE.
-  3. TRADE_CONFIRM: the proposer picks CONFIRM_TRADE(player=acceptor) or CANCEL_TRADE.
-  4. Back to MAIN. Events: TRADE_PROPOSED / TRADE_RESPONDED / TRADE_EXECUTED / TRADE_CANCELLED.
+Domestic trade (gated by `EngineConfig.allow_domestic_trade`):
+  1. MAIN: the current player may PROPOSE_TRADE(offer) or INVITE_TRADE up to
+     `max_trade_proposals_per_turn` times.
+     One-for-one offers are enumerated for the baseline policy; other valid offers are validated
+     on submission (give <= own hand, give/receive disjoint and non-empty).
+  2. TRADE_RESPONSE: every other seat, in turn order, accepts (if able), rejects, or makes one
+     counteroffer. A counteroffer is expressed from that responder's perspective.
+  3. TRADE_CONFIRM: the active player picks one accepted offer or affordable counteroffer,
+     or cancels. Trades always include the active player.
+  4. Back to MAIN. All negotiation terms and responses are public events.
 """
 
 from typing import Any
@@ -83,6 +86,53 @@ def victory_points(s: GameState, player: int, include_hidden: bool = True) -> in
 
 def can_afford(hand: list[int], cost: tuple[int, ...]) -> bool:
     return all(h >= c for h, c in zip(hand, cost, strict=True))
+
+
+def can_propose_trade(s: GameState) -> bool:
+    """Whether the current player may initiate another offer this turn."""
+    p = s.current_player
+    config = s.config
+    proposal_limit = config.max_trade_proposals_per_turn
+    trade_limit = config.max_domestic_trades_per_turn
+    return (
+        config.allow_domestic_trade
+        and s.phase == Phase.MAIN
+        and s.decision_player == p
+        and (proposal_limit is None or s.trade_proposals_this_turn < proposal_limit)
+        and (trade_limit is None or s.domestic_trades_this_turn < trade_limit)
+        and any(s.hands[p])
+    )
+
+
+def can_counter_trade(s: GameState) -> bool:
+    """The responding player may offer terms using only cards in their own hand."""
+    return (
+        s.config.allow_domestic_trade
+        and s.phase == Phase.TRADE_RESPONSE
+        and s.decision_player != s.current_player
+        and any(s.hands[s.decision_player])
+    )
+
+
+def valid_trade_offer(s: GameState, offer: A.TradeOffer | None) -> bool:
+    """Validate public terms against the acting offer maker's hand, never the other hand."""
+    if not isinstance(offer, A.TradeOffer):
+        return False
+    give, receive = offer
+    if type(give) is not tuple or type(receive) is not tuple:
+        return False
+    if len(give) != NUM_RESOURCES or len(receive) != NUM_RESOURCES:
+        return False
+    if any(type(n) is not int or n < 0 for n in (*give, *receive)):
+        return False
+    if not any(give) or not any(receive):
+        return False
+    if any(give[r] and receive[r] for r in _RESOURCES):
+        return False
+    limit = s.config.max_trade_cards_per_side
+    if limit and (sum(give) > limit or sum(receive) > limit):
+        return False
+    return can_afford(s.hands[s.decision_player], give)
 
 
 def trade_ratios(s: GameState, player: int) -> list[int]:
@@ -203,7 +253,33 @@ def legal_actions(s: GameState) -> list[Action]:
         return [A.ROAD_AT[e] for e in CORNER_EDGES[s.setup_corner] if edge_owner[e] < 0]
     if phase == Phase.GAME_OVER:
         return []
-    raise NotImplementedError(f"{phase.name}: domestic trade is not implemented yet")
+    if phase == Phase.TRADE_RESPONSE:
+        out = [A.REJECT_TRADE]
+        if s.pending_trade is not None and can_afford(s.hands[p], s.pending_trade.receive):
+            out.insert(0, A.ACCEPT_TRADE)
+        if can_counter_trade(s):
+            out.extend(
+                offer
+                for give in _RESOURCES
+                if s.hands[p][give]
+                for offer in A.ONE_FOR_ONE[give]
+                if offer is not None
+            )
+        return out
+    if phase == Phase.TRADE_CONFIRM:
+        return [
+            *(
+                A.CONFIRM_TRADE_WITH[q]
+                for q in _SEATS
+                if s.trade_acceptances[q]
+                or (
+                    s.trade_counteroffers[q] is not None
+                    and can_afford(s.hands[s.current_player], s.trade_counteroffers[q].receive)
+                )
+            ),
+            A.CANCEL_TRADE,
+        ]
+    raise ValueError(f"unknown game phase {phase}")
 
 
 def _main_actions(s: GameState, p: int) -> list[Action]:
@@ -223,6 +299,15 @@ def _main_actions(s: GameState, p: int) -> list[Action]:
         if hand[give] >= ratios[give]:
             row = A.MARITIME[give]
             out.extend(a for r in _RESOURCES if bank[r] and (a := row[r]) is not None)
+    if can_propose_trade(s):
+        out.append(A.INVITE_TRADE)
+        out.extend(
+            offer
+            for give in _RESOURCES
+            if hand[give]
+            for offer in A.ONE_FOR_ONE[give]
+            if offer is not None
+        )
     return out
 
 
@@ -545,10 +630,91 @@ def _end_turn(s, action, p, rng, outcome, events):
     s.last_roll = 0
     s.dev_played_this_turn = False
     s.dev_bought_this_turn = [0] * len(DevCard)
+    s.trade_proposals_this_turn = 0
+    s.domestic_trades_this_turn = 0
 
 
 def _domestic_trade(s, action, p, rng, outcome, events):
-    raise NotImplementedError("domestic trade is not implemented yet")
+    kind = action.type
+    proposer = s.current_player
+    if s.phase == Phase.MAIN and kind in (ActionType.PROPOSE_TRADE, ActionType.INVITE_TRADE):
+        if kind == ActionType.PROPOSE_TRADE:
+            assert valid_trade_offer(s, action.trade)
+        s.pending_trade = action.trade if kind == ActionType.PROPOSE_TRADE else None
+        s.trade_proposals_this_turn += 1
+        s.trade_responses = 0
+        s.trade_acceptances = [False] * NUM_PLAYERS
+        s.trade_counteroffers = [None] * NUM_PLAYERS
+        s.phase = Phase.TRADE_RESPONSE
+        s.decision_player = (proposer + 1) % NUM_PLAYERS
+        if kind == ActionType.PROPOSE_TRADE:
+            events.append(
+                Event(
+                    EventKind.TRADE_PROPOSED,
+                    proposer,
+                    give=action.trade.give,
+                    receive=action.trade.receive,
+                )
+            )
+        else:
+            events.append(Event(EventKind.TRADE_INVITED, proposer))
+        return
+    if kind in (ActionType.ACCEPT_TRADE, ActionType.REJECT_TRADE, ActionType.PROPOSE_TRADE):
+        accepted = kind == ActionType.ACCEPT_TRADE
+        s.trade_acceptances[p] = accepted
+        if kind == ActionType.PROPOSE_TRADE:
+            assert valid_trade_offer(s, action.trade)
+            s.trade_counteroffers[p] = action.trade
+        s.trade_responses += 1
+        if kind == ActionType.PROPOSE_TRADE:
+            events.append(
+                Event(
+                    EventKind.TRADE_COUNTERED,
+                    p,
+                    target=proposer,
+                    give=action.trade.give,
+                    receive=action.trade.receive,
+                )
+            )
+        else:
+            events.append(Event(EventKind.TRADE_RESPONDED, p, target=proposer, value=int(accepted)))
+        if s.trade_responses == NUM_PLAYERS - 1:
+            s.phase = Phase.TRADE_CONFIRM
+            s.decision_player = proposer
+        else:
+            s.decision_player = (proposer + 1 + s.trade_responses) % NUM_PLAYERS
+        return
+    if kind == ActionType.CONFIRM_TRADE:
+        partner = action.player
+        counter = s.trade_counteroffers[partner]
+        if counter is None:
+            assert s.pending_trade is not None
+            give, receive = s.pending_trade
+        else:
+            give, receive = counter.receive, counter.give
+        for r in _RESOURCES:
+            s.hands[proposer][r] += receive[r] - give[r]
+            s.hands[partner][r] += give[r] - receive[r]
+        s.domestic_trades_this_turn += 1
+        events.append(
+            Event(
+                EventKind.TRADE_EXECUTED,
+                proposer,
+                target=partner,
+                give=give,
+                receive=receive,
+            )
+        )
+    elif kind == ActionType.CANCEL_TRADE:
+        events.append(Event(EventKind.TRADE_CANCELLED, proposer))
+    else:
+        raise ValueError(f"unexpected trade action {kind}")
+    s.pending_trade = None
+    s.trade_responses = 0
+    s.trade_acceptances = [False] * NUM_PLAYERS
+    s.trade_counteroffers = [None] * NUM_PLAYERS
+    s.phase = Phase.MAIN
+    s.decision_player = proposer
 
 
 def _update_longest_road(s: GameState, events: list[Event]) -> None:
@@ -586,6 +752,7 @@ _HANDLERS = {
     ActionType.DISCARD: _discard,
     ActionType.MARITIME_TRADE: _maritime_trade,
     ActionType.PROPOSE_TRADE: _domestic_trade,
+    ActionType.INVITE_TRADE: _domestic_trade,
     ActionType.ACCEPT_TRADE: _domestic_trade,
     ActionType.REJECT_TRADE: _domestic_trade,
     ActionType.CONFIRM_TRADE: _domestic_trade,

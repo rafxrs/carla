@@ -1,9 +1,8 @@
 """Turns the human seat's clicks and button presses into engine `Action`s (pure: no Arcade).
 
 The controller never decides what is legal: highlighted targets, enabled buttons and picker
-options all come from the legal actions passed to `reset`, and every action it returns is one of
-them. The one exception is a domestic trade offer, which the engine validates instead of
-enumerating (and does not implement yet).
+options come from legal actions. Domestic offers are validated by the engine rather than
+enumerated, so the composer applies the same configurable offer limits.
 """
 
 from collections.abc import Hashable, Sequence
@@ -12,7 +11,7 @@ from typing import NamedTuple
 from carla.engine import actions as A
 from carla.engine.actions import Action, ActionType, TradeOffer
 from carla.engine.constants import NUM_PLAYERS, NUM_RESOURCES, DevCard
-from carla.engine.rules import trade_ratios
+from carla.engine.rules import trade_ratios, valid_trade_offer
 from carla.engine.state import GameState, Phase
 from carla.engine.text import resources_text
 from carla.gui.theme import DEV_LABELS, RESOURCE_LABELS
@@ -40,6 +39,7 @@ class Picker(NamedTuple):
     options: tuple[Option, ...]
     cancellable: bool = True
     detail: str = ""
+    cancel_label: str = "Cancel (Esc)"
 
 
 class ButtonSpec(NamedTuple):
@@ -87,6 +87,7 @@ class Controller:
         self._robber_tile = -1
         self._give = [0] * NUM_RESOURCES
         self._get = [0] * NUM_RESOURCES
+        self._offer_mode = "offer"
 
     # ------------------------------------------------------------------ position
 
@@ -108,6 +109,7 @@ class Controller:
         for a in self._by_type.get(_T.MOVE_ROBBER, ()):
             self._tiles.setdefault(a.tile, []).append(a)
         self._close()
+        self._offer_mode = "offer"
         if _T.DISCARD in self._by_type:
             self.picker = self._discard_picker()
         elif _T.ACCEPT_TRADE in self._by_type or _T.REJECT_TRADE in self._by_type:
@@ -203,6 +205,7 @@ class Controller:
         elif button == "bank_trade":
             self.picker = self._give_picker()
         elif button == "trade":
+            self._offer_mode = "offer"
             self._give, self._get = [0] * NUM_RESOURCES, [0] * NUM_RESOURCES
             self.picker = self._offer_picker()
         else:
@@ -238,6 +241,11 @@ class Controller:
             self._first = option.resource
             self.picker = self._get_picker()
             return None
+        if kind == "response" and key == "counter":
+            self._offer_mode = "counter"
+            self._give, self._get = [0] * NUM_RESOURCES, [0] * NUM_RESOURCES
+            self.picker = self._offer_picker()
+            return None
         if kind == "offer":
             return self._choose_offer(key)
         action = self._picked_action(kind, key)
@@ -255,6 +263,10 @@ class Controller:
         """Close a cancellable picker (Esc); mandatory ones (discard, trade answers) stay."""
         if self.picker is None or not self.picker.cancellable:
             return False
+        if self.picker.kind == "offer" and self._offer_mode == "counter":
+            self._offer_mode = "offer"
+            self.picker = self._response_picker()
+            return True
         self._close()
         return True
 
@@ -280,8 +292,11 @@ class Controller:
         )
 
     def _can_offer(self) -> bool:
-        s = self.state
-        return s is not None and s.phase == Phase.MAIN and self.active and any(self._hand())
+        return (
+            self.state is not None
+            and self.state.phase == Phase.MAIN
+            and _T.PROPOSE_TRADE in self._by_type
+        )
 
     def _picked_action(self, kind: str, key: Hashable) -> Action | None:
         if kind == "monopoly":
@@ -405,18 +420,40 @@ class Controller:
     def _response_picker(self) -> Picker:
         assert self.state is not None
         s = self.state
-        offer = s.pending_trade or TradeOffer((0,) * NUM_RESOURCES, (0,) * NUM_RESOURCES)
-        title = f"P{s.current_player} offers {resources_text(offer.give)}"
+        offer = s.pending_trade
+        title = (
+            f"P{s.current_player} offers {resources_text(offer.give)}"
+            if offer is not None
+            else f"P{s.current_player} invites trade offers"
+        )
         options = (
             Option("accept", "Accept", _T.ACCEPT_TRADE in self._by_type),
             Option("reject", "Reject", _T.REJECT_TRADE in self._by_type),
+            Option("counter", "Make offer", _T.PROPOSE_TRADE in self._by_type),
         )
-        detail = f"and wants {resources_text(offer.receive)} in return"
+        detail = (
+            f"and wants {resources_text(offer.receive)} in return"
+            if offer is not None
+            else "Offer resources in exchange for the active player's resources"
+        )
         return Picker("response", title, options, cancellable=False, detail=detail)
 
     def _confirm_picker(self) -> Picker:
+        assert self.state is not None
+        s = self.state
         partners = tuple(
-            Option(a.player, f"Trade with P{a.player}", True, player=a.player)
+            Option(
+                a.player,
+                f"Trade with P{a.player}",
+                True,
+                (
+                    f"Give {resources_text(counter.receive)}\nGet {resources_text(counter.give)}"
+                    if (counter := s.trade_counteroffers[a.player]) is not None
+                    else f"Give {resources_text(s.pending_trade.give)}\n"
+                    f"Get {resources_text(s.pending_trade.receive)}"
+                ),
+                player=a.player,
+            )
             for a in self._by_type.get(_T.CONFIRM_TRADE, ())
         )
         cancel = Option("cancel", "Cancel trade", _T.CANCEL_TRADE in self._by_type)
@@ -424,20 +461,50 @@ class Controller:
         return Picker("confirm", "Complete your trade", (*partners, cancel), False, detail)
 
     def _offer_picker(self) -> Picker:
+        assert self.state is not None
         hand, give, get = self._hand(), self._give, self._get
+        limit = self.state.config.max_trade_cards_per_side
         options = []
         for r in _RESOURCES:
             options += [
-                Option(("give", r, 1), "+", give[r] < hand[r], resource=r),
+                Option(
+                    ("give", r, 1),
+                    "+",
+                    give[r] < hand[r] and get[r] == 0 and (not limit or sum(give) < limit),
+                    resource=r,
+                ),
                 Option(("give", r, -1), "-", give[r] > 0, resource=r),
-                Option(("get", r, 1), "+", True, resource=r),
+                Option(
+                    ("get", r, 1),
+                    "+",
+                    give[r] == 0 and (not limit or sum(get) < limit),
+                    resource=r,
+                ),
                 Option(("get", r, -1), "-", get[r] > 0, resource=r),
             ]
-        options.append(Option("propose", "Propose", any(give) and any(get)))
-        detail = f"Give {resources_text(give)} for {resources_text(get)}"
-        return Picker("offer", "Offer a trade", tuple(options), detail=detail)
+        offer = TradeOffer(tuple(give), tuple(get))
+        options.append(
+            Option(
+                "propose",
+                "Counteroffer" if self._offer_mode == "counter" else "Propose",
+                valid_trade_offer(self.state, offer),
+            )
+        )
+        if self._offer_mode == "offer":
+            options.append(Option("invite", "Invite offers", _T.INVITE_TRADE in self._by_type))
+        detail = (
+            f"Give {resources_text(give)} for {resources_text(get)}"
+            if any(give) or any(get)
+            else "Choose resources to give and receive"
+        )
+        title = "Make a counteroffer" if self._offer_mode == "counter" else "Offer a trade"
+        cancel_label = "Back (Esc)" if self._offer_mode == "counter" else "Cancel (Esc)"
+        return Picker("offer", title, tuple(options), detail=detail, cancel_label=cancel_label)
 
     def _choose_offer(self, key: Hashable) -> Action | None:
+        if key == "invite":
+            self._close()
+            return A.INVITE_TRADE
         if key == "propose":
             offer = TradeOffer(tuple(self._give), tuple(self._get))
             self._close()

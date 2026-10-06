@@ -13,10 +13,20 @@ from carla.envs.observation import (
     GLOBAL_FEATURES,
     PLAYER_FEATURES,
     TILE_FEATURES,
+    TRADE_FEATURES,
 )
 from carla.models.base import PolicyNetwork, PolicyOutput
 
-FLAT_KEYS = ("tiles", "corners", "edges", "players", "hand", "dev_cards", "globals")
+FLAT_KEYS = (
+    "tiles",
+    "corners",
+    "edges",
+    "players",
+    "hand",
+    "dev_cards",
+    "globals",
+    "trade_context",
+)
 FLAT_SIZE = (
     19 * TILE_FEATURES
     + 54 * CORNER_FEATURES
@@ -25,6 +35,7 @@ FLAT_SIZE = (
     + 5
     + 10
     + GLOBAL_FEATURES
+    + TRADE_FEATURES
 )
 
 

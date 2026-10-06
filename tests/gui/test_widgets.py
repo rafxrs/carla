@@ -2,6 +2,7 @@ import pytest
 
 from carla.engine import actions as A
 from carla.engine.actions import TradeOffer
+from carla.engine.config import EngineConfig
 from carla.engine.constants import DevCard
 from carla.engine.state import Phase
 from carla.gui import theme
@@ -69,7 +70,7 @@ def test_slider():
 def pickers() -> list[Picker]:
     """One picker of every kind, from real positions."""
     out = []
-    game = post_setup_game()
+    game = post_setup_game(config=EngineConfig(allow_domestic_trade=True))
     for card in DevCard:
         give_dev(game, 0, card)
     give(game, 0, (4, 4, 4, 4, 4))
@@ -127,8 +128,40 @@ def test_offer_composer_has_a_stepper_per_resource_and_side():
     layout = layout_picker(picker, AREA)
     keys = {o.key for o, _ in layout.options}
     assert keys == {(side, r, d) for side in ("give", "get") for r in range(5) for d in (1, -1)} | {
-        "propose"
+        "propose",
+        "invite",
     }
+
+
+def test_three_trade_partners_fit_the_smallest_window():
+    picker = Picker(
+        "confirm",
+        "Complete your trade",
+        (
+            *(
+                Option(
+                    seat,
+                    f"Trade with P{seat}",
+                    detail="Give 2 lumber, 1 wool, 1 grain\nGet 2 brick, 1 grain, 1 ore",
+                    player=seat,
+                )
+                for seat in (1, 2, 3)
+            ),
+            Option("cancel", "Cancel trade"),
+        ),
+        cancellable=False,
+    )
+    area = Rect(0, 0, 640, 450)
+    layout = layout_picker(picker, area)
+    assert area.contains(layout.panel.x, layout.panel.y)
+    assert area.contains(layout.panel.right, layout.panel.top)
+    assert all(
+        layout.panel.contains(rect.x, rect.y) and layout.panel.contains(rect.right, rect.top)
+        for _, rect in layout.options
+    )
+    layer = Layer("picker")
+    draw_picker(layer, picker, layout)
+    assert len([item for item in layer.texts if item.text.startswith("Give 2 lumber")]) == 3
 
 
 def test_resource_pickers_use_five_columns():

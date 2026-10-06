@@ -2,6 +2,7 @@ import pytest
 import torch
 
 from carla.config.schema import ModelConfig
+from carla.engine.config import EngineConfig
 from carla.engine.game import Game
 from carla.engine.rng import Rng
 from carla.envs.action_space import (
@@ -19,6 +20,7 @@ from carla.models import (
     board_graph,
     build_policy,
 )
+from tests.engine.scenario import give, post_setup_game
 
 
 def sampled_positions(n_games: int = 2, every: int = 7):
@@ -54,6 +56,17 @@ def test_distribution_is_normalised_over_legal_actions_and_entropy_is_exact():
         assert torch.logsumexp(logp, 0).item() == pytest.approx(0.0, abs=1e-5)
         entropy = FactoredDistribution(logits, masks).entropy().item()
         assert entropy == pytest.approx(-(logp.exp() * logp).sum().item(), abs=1e-4)
+
+
+def test_distribution_covers_domestic_trade_offers():
+    game = post_setup_game(config=EngineConfig(allow_domestic_trade=True))
+    give(game, 0, (1, 0, 0, 0, 0))
+    legal = game.legal_actions()
+    masks, logits = masks_and_logits(legal, game.decision_player, torch.Generator().manual_seed(4))
+    heads = torch.stack([torch.as_tensor(encode_action(a, 0)) for a in legal])
+    dist = FactoredDistribution(expand(logits, len(legal)), expand(masks, len(legal)))
+    logp = dist.log_prob(heads)
+    assert torch.logsumexp(logp, 0).item() == pytest.approx(0.0, abs=1e-5)
 
 
 def test_samples_are_always_legal():

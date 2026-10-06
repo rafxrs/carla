@@ -26,7 +26,7 @@ from carla.engine.events import Event
 from carla.engine.game import Game
 from carla.engine.rng import derive_seed
 from carla.engine.text import describe_state
-from carla.envs.action_space import HEAD_NAMES, HEAD_SIZES, decode_action
+from carla.envs.action_space import HEAD_NAMES, HEAD_SIZES, decode_action, encode_action
 from carla.envs.observation import ObservationEncoder
 from carla.envs.rewards import public_victory_points, step_rewards
 
@@ -111,6 +111,25 @@ class CatanAECEnv:
         }
 
 
+class _LegalActionSpace(spaces.MultiDiscrete):
+    """Sample a legal head vector for the environment's current learner decision."""
+
+    def __init__(self, env: "CatanEnv") -> None:
+        super().__init__([HEAD_SIZES[h] for h in HEAD_NAMES])
+        self.env = env
+
+    def sample(self, mask=None, probability=None):
+        if mask is not None or probability is not None or self.env.aec._game is None:
+            return super().sample(mask=mask, probability=probability)
+        game = self.env.game
+        if game.is_over or game.decision_player != self.env.learner:
+            return super().sample()
+        legal = game.legal_actions()
+        action = legal[int(self.np_random.integers(len(legal)))]
+        heads = encode_action(action, self.env.learner)
+        return np.maximum(heads, 0)
+
+
 class CatanEnv(gym.Env):
     """One learner seat against three embedded opponents (`RandomAgent`s by default).
 
@@ -137,7 +156,7 @@ class CatanEnv(gym.Env):
             raise ValueError("CatanEnv needs exactly 3 opponents")
         self.render_mode = render_mode
         self.observation_space = self.aec.encoder.observation_space()
-        self.action_space = spaces.MultiDiscrete([HEAD_SIZES[h] for h in HEAD_NAMES])
+        self.action_space = _LegalActionSpace(self)
         self.learner = 0
         self._seat_agents: dict[int, Agent] = {}
 

@@ -142,8 +142,21 @@ def check_invariants(game: Game) -> None:
     else:
         assert 0 <= s.decision_player < NUM_PLAYERS
         assert game.legal_actions(), "a live game always offers an action"
-        if s.phase != Phase.DISCARD:
+        if s.phase == Phase.TRADE_RESPONSE:
+            assert 0 <= s.trade_responses < NUM_PLAYERS - 1
+            assert s.decision_player == (s.current_player + 1 + s.trade_responses) % NUM_PLAYERS
+            assert not s.trade_acceptances[s.current_player]
+            assert s.trade_counteroffers[s.current_player] is None
+        elif s.phase == Phase.TRADE_CONFIRM:
             assert s.decision_player == s.current_player
+            assert s.trade_responses == NUM_PLAYERS - 1
+        elif s.phase != Phase.DISCARD:
+            assert s.decision_player == s.current_player
+        if s.phase not in (Phase.TRADE_RESPONSE, Phase.TRADE_CONFIRM):
+            assert s.pending_trade is None
+            assert s.trade_responses == 0
+            assert not any(s.trade_acceptances)
+            assert not any(s.trade_counteroffers)
 
 
 # --------------------------------------------------------------------------- reference rules

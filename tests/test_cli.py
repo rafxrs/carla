@@ -54,6 +54,35 @@ def test_tournament_command(capsys):
     assert "win rate" in capsys.readouterr().out
 
 
+def test_tournament_reports_all_trade_metrics(tmp_path, capsys):
+    assert (
+        main(
+            [
+                "tournament",
+                "--config",
+                "configs/experiments/domestic_trade.yaml",
+                "--agents",
+                "heuristic",
+                "random",
+                "random",
+                "random",
+                "--games",
+                "1",
+                "--seeds",
+                "0",
+                "--records",
+                str(tmp_path),
+            ]
+        )
+        == 0
+    )
+    report = capsys.readouterr().out
+    assert "proposals" in report
+    assert "invitations" in report
+    assert "counteroffers" in report
+    assert "counter feasibility" in report
+
+
 def test_train_dry_run(tmp_path):
     pytest.importorskip("torch")
     assert main(["train", "configs/smoke.yaml", f"runtime.output_dir={tmp_path}"]) == 0
@@ -99,12 +128,14 @@ def test_gui_command_errors(gui_calls, tmp_path, capsys, monkeypatch):
     assert main(["gui", str(record), "--watch"]) == 2
     assert main(["gui", str(tmp_path / "missing.json")]) == 2
     assert not gui_calls
+    assert main(["gui", "--set", "engine.allow_domestic_trade=true"]) == 0
+    assert gui_calls[-1].engine.allow_domestic_trade
     monkeypatch.undo()  # the real GUI from here on, without letting it open a window
     monkeypatch.setitem(sys.modules, "arcade", None)
     assert main(["gui", "--watch"]) == 1
     assert "needs Arcade" in capsys.readouterr().err
     assert main(["gui", "--set", "engine.allow_domestic_trade=true"]) == 1
-    assert "domestic trade" in capsys.readouterr().err
+    assert "needs Arcade" in capsys.readouterr().err
 
 
 def test_gui_picks_a_random_seed_unless_one_is_given(gui_calls, capsys):

@@ -7,7 +7,7 @@ Each mask below applies to the head(s) listed, once the earlier heads are fixed:
 ==============  ========  ===================  ==========================================
 mask            shape     heads                used when
 ==============  ========  ===================  ==========================================
-type            (15,)     type                 always
+type            (16,)     type                 always
 settlement      (54,)     corner               type == BUILD_SETTLEMENT
 city            (54,)     corner               type == BUILD_CITY
 road            (72,)     edge                 type == BUILD_ROAD
@@ -18,9 +18,11 @@ monopoly        (5,)      resource             dev == MONOPOLY
 discard         (5,)      resource             type == DISCARD
 maritime        (5, 5)    resource -> resource2  type == MARITIME_TRADE (give -> receive)
 partner         (4,)      player               type == CONFIRM_TRADE
+trade           (5, 5)    resource -> resource2 type == PROPOSE_TRADE (1 card each)
 ==============  ========  ===================  ==========================================
 
-PROPOSE_TRADE is produced by the trade decoder (`carla.models.trade_decoder`), not by these heads.
+The heads offer one-for-one trades. Larger and mixed offers are accepted by the engine and GUI;
+the planned trade decoder can extend the policy beyond this baseline action subset.
 """
 
 from collections.abc import Iterable, Mapping, Sequence
@@ -28,6 +30,7 @@ from typing import Any
 
 import numpy as np
 
+from carla.engine import actions as A
 from carla.engine.actions import NUM_ACTION_TYPES, Action, ActionType
 from carla.engine.constants import NUM_DEV_CARD_TYPES, NUM_PLAYERS, NUM_RESOURCES, DevCard
 from carla.engine.topology import NUM_CORNERS, NUM_EDGES, NUM_TILES
@@ -57,6 +60,7 @@ MASK_SHAPES: dict[str, tuple[int, ...]] = {
     "discard": (NUM_RESOURCES,),
     "maritime": (NUM_RESOURCES, NUM_RESOURCES),
     "partner": (NUM_PLAYERS,),
+    "trade": (NUM_RESOURCES, NUM_RESOURCES),
 }
 
 _T = ActionType
@@ -90,11 +94,30 @@ def heads_used(action_type: int, dev: int = -1) -> tuple[str, ...]:
         return ("resource", "resource2")
     if action_type == _T.CONFIRM_TRADE:
         return ("player",)
+    if action_type == _T.PROPOSE_TRADE:
+        return ("resource", "resource2")
     return ()
 
 
 def empty_masks() -> dict[str, np.ndarray]:
     return {k: np.zeros(shape, dtype=bool) for k, shape in MASK_SHAPES.items()}
+
+
+def _one_for_one(offer: A.TradeOffer | None) -> tuple[int, int]:
+    """Extract a baseline policy offer without silently dropping extra cards."""
+    if (
+        offer is None
+        or len(offer.give) != NUM_RESOURCES
+        or len(offer.receive) != NUM_RESOURCES
+        or sum(offer.give) != 1
+        or sum(offer.receive) != 1
+        or any(type(n) is not int or n not in (0, 1) for n in (*offer.give, *offer.receive))
+    ):
+        raise ValueError("only one-for-one offers can be encoded as baseline policy heads")
+    give, receive = offer.give.index(1), offer.receive.index(1)
+    if give == receive:
+        raise ValueError("a trade must exchange different resources")
+    return give, receive
 
 
 def build_masks(legal: Iterable[Action], actor: int) -> dict[str, np.ndarray]:
@@ -123,6 +146,9 @@ def build_masks(legal: Iterable[Action], actor: int) -> dict[str, np.ndarray]:
             m["maritime"][a.resource, a.resource2] = True
         elif t == _T.CONFIRM_TRADE:
             m["partner"][relative_seat(a.player, actor)] = True
+        elif t == _T.PROPOSE_TRADE:
+            give, receive = _one_for_one(a.trade)
+            m["trade"][give, receive] = True
     return m
 
 
@@ -159,6 +185,9 @@ def sample_heads(masks: Mapping[str, np.ndarray], rng: np.random.Generator) -> n
         pick("resource2", masks["maritime"][give])
     elif t == _T.CONFIRM_TRADE:
         pick("player", masks["partner"])
+    elif t == _T.PROPOSE_TRADE:
+        give = pick("resource", masks["trade"].any(axis=1))
+        pick("resource2", masks["trade"][give])
     return heads
 
 
@@ -166,6 +195,11 @@ def encode_action(action: Action, actor: int) -> np.ndarray:
     """Head indices of `action` in HEAD_NAMES order; unused heads are -1."""
     heads = np.full(len(HEAD_NAMES), -1, dtype=np.int64)
     heads[0] = action.type
+    if action.type == _T.PROPOSE_TRADE:
+        give, receive = _one_for_one(action.trade)
+        heads[HEAD_INDEX["resource"]] = give
+        heads[HEAD_INDEX["resource2"]] = receive
+        return heads
     for name in heads_used(action.type, action.dev):
         value = getattr(action, name)
         if name == "player":
@@ -182,6 +216,13 @@ def decode_action(heads: Sequence[int] | np.ndarray | Mapping[str, int], actor: 
         values = [int(h) for h in heads]
         get = lambda name: values[HEAD_INDEX[name]]  # noqa: E731
     action_type = ActionType(get("type"))
+    if action_type == _T.PROPOSE_TRADE:
+        give, receive = int(get("resource")), int(get("resource2"))
+        if not 0 <= give < NUM_RESOURCES or not 0 <= receive < NUM_RESOURCES or give == receive:
+            raise ValueError("invalid one-for-one trade heads")
+        offer = A.ONE_FOR_ONE[give][receive]
+        assert offer is not None
+        return offer
     dev = get("dev") if action_type == _T.PLAY_DEV_CARD else -1
     fields = {}
     for name in heads_used(action_type, dev):
