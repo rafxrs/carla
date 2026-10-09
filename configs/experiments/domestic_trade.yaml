@@ -1,4 +1,5 @@
-# Runnable MLP baseline with player-to-player trading enabled.
+# Runnable MLP baseline with player-to-player trading enabled. `carla gui` trades
+# by default (see --no-trading) and only takes the limits from here.
 extends: mlp.yaml
 name: domestic_trade
 engine:

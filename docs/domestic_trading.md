@@ -7,8 +7,9 @@ player confirms one exchange or cancels. Cards move only on confirmation.
 
 The engine and Arcade GUI accept multi-card, multi-resource offers. The current
 factored policy and baseline bots generate one-for-one offers. That smaller policy
-action space is not the engine's rule limit. Trading is off by default; the runnable
-MLP example `configs/experiments/domestic_trade.yaml` enables it. `full_trade.yaml`
+action space is not the engine's rule limit. The engine leaves trading off by default;
+the runnable MLP example `configs/experiments/domestic_trade.yaml` enables it, and
+`carla gui` turns it on unless given `--no-trading`. `full_trade.yaml`
 describes planned model work, not a completed training configuration.
 
 ## Offer meaning
@@ -29,7 +30,7 @@ perspective.
 
 | `EngineConfig` field | Default | Effect |
 | --- | ---: | --- |
-| `allow_domestic_trade` | `False` | Enables the protocol in the main phase. |
+| `allow_domestic_trade` | `False` | Enables the protocol in the main phase (on in the GUI unless `--no-trading`). |
 | `max_trade_proposals_per_turn` | 3 | Negotiation rounds started by the active player, including invitations and cancelled rounds. `None` removes the cap; `0` disables rounds. |
 | `max_domestic_trades_per_turn` | 3 | Completed exchanges on the active player's turn. `None` removes the cap; `0` prevents new rounds. |
 | `max_trade_cards_per_side` | 4 | Cards given or requested in one proposal or counteroffer. `0` removes the cap. |
@@ -78,7 +79,7 @@ bank is unaffected by domestic exchanges.
 | Rules and transitions | `engine/rules.py`, `engine/game.py` | Lists baseline legal actions, validates arbitrary submitted offers, enforces hand and phase checks, transfers cards, and clears round state. |
 | Events and replay | `engine/events.py`, `engine/text.py`, game records | Publishes invitations, proposals, responses, counters, executions, and cancellations, with readable logs and exact replay. |
 | Environment and model | `envs/action_space.py`, `envs/observation.py`, `models/` | Adds trade action types and masks, public relative-seat context, and one-for-one policy heads. |
-| Human and bot play | `gui/controller.py`, `gui/widgets.py`, `gui/session.py`, `agents/` | Composes full offers in Arcade, shows each partner's terms, and supplies baseline decisions. |
+| Human and bot play | `gui/controller.py`, `gui/trade.py`, `gui/session.py`, `agents/` | Builds offers from hand cards in Arcade, shows every offer and answer as cards, and supplies baseline decisions. |
 | Evaluation | `eval/metrics.py`, `cli.py` | Reports invitations, counters, feasibility, acceptance, and execution from recorded games and tournaments. |
 
 `GameState` stores the pending offer (`None` for an invitation), acceptances,
@@ -118,19 +119,28 @@ measures describe opportunities and behavior, not trade quality or win-rate gain
 
 ## Arcade flow and how to run it
 
-The hand bar shows **Offer trade** (`P`) when trading is enabled and a round can
-start. Its dialog uses the existing panel, resource colours, button shapes, and
-text style. Per-resource `+` and `-` controls compose multi-card proposals, while
-**Invite offers** starts a round without terms. Responders see the proposal and may
-accept, reject, or compose a counteroffer. `Esc` in a counteroffer composer returns
-to the mandatory response. The active player sees selectable partners with their
-exact give/get terms and can confirm one or cancel. Bank and port trades retain
-their separate **Bank trade** control.
+Trades start from the hand. Clicking a resource card opens the
+trade panel above the hand and moves that card into **You give**; each further click
+adds another. Clicking one of the five resources on the right adds it to **You get**,
+and clicking a card in the panel takes it back. One offer then goes to the
+**bank** (each resource given in a multiple of its rate, one card per batch, played
+as consecutive maritime trades) or to the **players**. **Ask for offers** starts a
+round without terms. `T` opens an empty offer and `Esc` closes it.
+
+Offers and answers show their cards. A responder sees the proposal under **You give**
+and **You get** and can decline, accept, or counter; clicking a hand card also starts
+a counteroffer. While the others answer, the proposer sees each seat's status, then
+picks a deal with its **Trade** button or cancels. Spectators see the same table
+read-only.
 
 ```bash
-uv sync --locked --extra cpu --extra dev --extra gui
-uv run --no-sync carla gui --play --seat 0 --config configs/experiments/domestic_trade.yaml
+carla gui --play                       # player trading on, default limits
+carla gui --play --no-trading          # bank and port trades only
+carla gui --play --set engine.max_trade_cards_per_side=2
 ```
+
+With `--config`, the GUI takes the limits from the file; whether players trade at
+all is set by `--no-trading`, not by the file.
 
 The README has simulation and tournament commands for non-GUI runs.
 

@@ -16,7 +16,7 @@ CARLA is being built to learn four-player Settlers of Catan by self-play PPO on 
 | `eval/`   | eval/bots  | **Working.** Seeded tournaments with seat rotation and Wilson CIs, multi-process. Recorded games support trade feasibility, acceptance, and execution metrics. Plots: TODO. |
 | `models/` | models     | Masked factored distribution and MLP baseline handle one-for-one offers. GNN, set attention, belief module, and variable-length trade decoder remain TODOs. |
 | `rl/`     | RL         | GAE, rollout collection, checkpoints, `carla train` dry run **done**. PPO update, async workers, opponent pool: **interfaces + TODOs**.                                                                                                                                                                           |
-| `gui/`    | GUI        | **Implemented.** Arcade play, watch, and replay modes. With domestic trading enabled, humans can compose multi-card offers, invite offers, counter, and confirm exchanges. |
+| `gui/`    | GUI        | **Implemented.** Arcade play, watch, and replay modes. Click resource cards to build a trade, then send it to the bank or the other players; offers, answers and counteroffers show their cards. Player trading is on unless `--no-trading`. |
 
 The domestic trade protocol, defaults, and extension points are documented in
 [docs/domestic_trading.md](docs/domestic_trading.md).
@@ -47,7 +47,7 @@ carla tournament --config configs/bots.yaml            # win rates with 95% CIs
 carla config configs/experiments/gnn.yaml model.belief=gru   # print a resolved config
 carla train configs/smoke.yaml       # dry run until the PPO update lands
 carla gui --play --seat 0 --opponents heuristic   # needs the gui extra; H shows the shortcuts
-carla gui --play --seat 0 --config configs/experiments/domestic_trade.yaml
+carla gui --play --no-trading                     # bank and port trades only
 carla gui --watch --opponents heuristic,random    # a live bot game with play/pause/step/seek
 carla gui runs/games/game_0000.json.gz            # replay a record
 python scripts/benchmark_engine.py
