@@ -121,7 +121,7 @@ def test_play_mode_full_game_through_the_controller():
         kinds = sorted({a.type for a in legal})
         kind = kinds[rng.randbelow(len(kinds))]
         target = rng.choice([a for a in legal if a.type == kind])
-        action = drive(controller, script_for(target, legal))
+        action = drive(controller, script_for(target, legal, game.state))
         assert action == target
         assert action is not None
         session.submit(action)

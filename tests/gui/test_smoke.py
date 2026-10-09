@@ -14,7 +14,9 @@ from carla.engine.config import EngineConfig
 from carla.engine.constants import DevCard
 from carla.engine.record import GameRecord
 from carla.engine.rng import Rng
+from carla.engine.rules import trade_ratios
 from carla.engine.simulate import play_random_game
+from carla.engine.state import Phase
 from carla.gui.app import DIGIT_KEYS, KEY_COMMANDS, MOUSE_LEFT, MOUSE_RIGHT, GuiApp, GuiOptions
 from carla.gui.geometry import Point
 from tests.engine.scenario import give, post_setup_game
@@ -84,44 +86,40 @@ def test_play_window_draws_and_routes_input(open_app):
     assert app.layout.width == 1000 and drawn_something(app)
 
 
-def test_domestic_trade_picker_draws_in_arcade_window(open_app):
-    config = EngineConfig(allow_domestic_trade=True)
-    app, _window = open_app(GuiOptions(mode="play", engine=config, delay=0.0))
-    game = post_setup_game(config=config)
-    give(game, 0, (2, 0, 0, 0, 0))
-    app.controller.reset(game.state, game.legal_actions())
-    assert app.controller.press("trade") is None
-    app.controller.choose(("give", 0, 1))
-    app.controller.choose(("give", 0, 1))
-    app.controller.choose(("get", 1, 1))
-    assert app.controller.picker is not None and app.controller.picker.kind == "offer"
-    assert drawn_something(app)
-
-
-def test_counteroffer_and_confirmation_draw_in_arcade_window(open_app):
+def test_trade_panels_draw_in_arcade_window(open_app):
     config = EngineConfig(allow_domestic_trade=True)
     app, _window = open_app(GuiOptions(mode="play", engine=config, delay=0.0))
     game = post_setup_game(config=config)
     give(game, 0, (2, 0, 1, 0, 0))
     give(game, 1, (0, 1, 0, 0, 1))
-    game.step(A.ONE_FOR_ONE[0][4])
     app.on_resize(1000, 660)
-    app.controller.seat = 1
-    app.controller.reset(game.state, game.legal_actions())
-    assert app.controller.picker is not None and app.controller.picker.kind == "response"
+    c = app.controller
+    c.reset(game.state, game.legal_actions())
+    c.offer_card(0)
+    c.offer_card(0)
+    c.choose_trade(("want", 1))
+    panels = [c.trade_panel()]
     assert drawn_something(app)
-    app.controller.choose("counter")
-    assert app.controller.picker is not None
-    assert app.controller.picker.cancel_label == "Back (Esc)"
+    lumber_for_ore, ore_for_wool = A.ONE_FOR_ONE[0][4], A.ONE_FOR_ONE[4][2]
+    assert lumber_for_ore is not None and ore_for_wool is not None
+    game.step(lumber_for_ore)
+    c.seat = 1
+    c.reset(game.state, game.legal_actions())
+    panels.append(c.trade_panel())
     assert drawn_something(app)
-    game.step(A.ONE_FOR_ONE[4][2])
+    c.choose_trade("counter")
+    panels.append(c.trade_panel())
+    assert drawn_something(app)
+    game.step(ore_for_wool)
     game.step(A.REJECT_TRADE)
     game.step(A.REJECT_TRADE)
-    app.controller.seat = 0
-    app.controller.reset(game.state, game.legal_actions())
-    assert app.controller.picker is not None and app.controller.picker.kind == "confirm"
-    assert app.controller.picker.options[0].detail == "Give 1 wool\nGet 1 ore"
+    c.seat = 0
+    c.reset(game.state, game.legal_actions())
+    panels.append(c.trade_panel())
     assert drawn_something(app)
+    assert [p.kind if p else None for p in panels] == ["offer", "respond", "counter", "responses"]
+    counter = panels[-1].rows[1] if panels[-1] else None
+    assert counter is not None and (counter.give, counter.get) == ((0, 0, 1, 0, 0), (0,) * 4 + (1,))
 
 
 def test_watch_and_replay_windows(open_app, tmp_path):
@@ -156,8 +154,7 @@ def test_key_and_mouse_codes_match_arcade():
         k.E: "end_turn",
         k.B: "buy_dev",
         k.D: "play_dev",
-        k.T: "bank_trade",
-        k.P: "trade",
+        k.T: "trade",
         k.S: "save",
         k.N: "new_game",
     }
@@ -188,6 +185,26 @@ def screen_clicks(app: GuiApp, action: Action, legal: Sequence[Action]) -> Itera
         cell = next(r for o, r in layout.options if o.key == key)
         return cell.cx, cell.cy
 
+    def trade(key: object) -> Point:
+        layout = app.trade_layout()
+        assert layout is not None
+        hits = [c.rect for c, k in layout.cards if k == key and c.playable]
+        hits += [r for b, r in layout.buttons if b.key == key and b.enabled]
+        return hits[-1].cx, hits[-1].cy
+
+    def hand_card(resource: int) -> Point:
+        card = app.hand_bar().cards[resource]
+        assert card.playable
+        return card.rect.cx, card.rect.cy
+
+    def offer(give: Sequence[int], get: Sequence[int]) -> Iterator[Point]:
+        for r, n in enumerate(give):
+            for _ in range(n):
+                yield hand_card(r)
+        for r, n in enumerate(get):
+            for _ in range(n):
+                yield trade(("want", r))
+
     simple = {T.ROLL_DICE: "roll", T.END_TURN: "end_turn", T.BUY_DEV_CARD: "buy_dev"}
     if t in simple:
         yield button(simple[t])
@@ -202,9 +219,26 @@ def screen_clicks(app: GuiApp, action: Action, legal: Sequence[Action]) -> Itera
     elif t == T.DISCARD:
         yield option(action.resource)
     elif t == T.MARITIME_TRADE:
-        yield button("bank_trade")
-        yield option(action.resource)
-        yield option(action.resource2)
+        give = [0] * 5
+        give[action.resource] = trade_ratios(app.session.game.state, app.controller.seat)[
+            action.resource
+        ]
+        yield from offer(give, [int(r == action.resource2) for r in range(5)])
+        yield trade("bank")
+    elif t == T.PROPOSE_TRADE:
+        assert action.trade is not None
+        if app.session.game.phase == Phase.TRADE_RESPONSE:
+            yield trade("counter")
+        yield from offer(*action.trade)
+        yield trade("propose")
+    elif t == T.INVITE_TRADE:
+        yield hand_card(min(app.controller.offerable_cards()))
+        yield trade("invite")
+    elif t in (T.ACCEPT_TRADE, T.REJECT_TRADE, T.CANCEL_TRADE):
+        keys = {T.ACCEPT_TRADE: "accept", T.REJECT_TRADE: "reject", T.CANCEL_TRADE: "cancel_trade"}
+        yield trade(keys[t])
+    elif t == T.CONFIRM_TRADE:
+        yield trade(("confirm", action.player))
     else:
         assert t == T.PLAY_DEV_CARD
         card = next(
@@ -220,8 +254,9 @@ def screen_clicks(app: GuiApp, action: Action, legal: Sequence[Action]) -> Itera
 
 
 def test_a_human_finishes_a_game_against_heuristic_bots_by_clicking(open_app):
-    app, window = open_app(GuiOptions(mode="play", seat=1, delay=0.0))
-    s, rng, moves = app.session, Rng(1), 0
+    trading = EngineConfig(allow_domestic_trade=True)
+    app, window = open_app(GuiOptions(mode="play", seat=1, delay=0.0, engine=trading))
+    s, rng, moves, played = app.session, Rng(1), 0, set()
     assert s.seat_names() == ["heuristic", "You", "heuristic", "heuristic"]
     while not s.game.is_over:
         if not s.waiting_for_human:
@@ -234,8 +269,11 @@ def test_a_human_finishes_a_game_against_heuristic_bots_by_clicking(open_app):
         for xy in screen_clicks(app, target, legal):
             click(window, xy)
         assert s.game.history[-1].action == target
+        played.add(target.type)
         moves += 1
         if moves % 10 == 0:
             assert drawn_something(app)
     app.on_update(0.05)
     assert app.results and moves > 20 and drawn_something(app)
+    trades = {T.MARITIME_TRADE, T.PROPOSE_TRADE, T.INVITE_TRADE, T.CONFIRM_TRADE, T.CANCEL_TRADE}
+    assert trades | {T.ACCEPT_TRADE, T.REJECT_TRADE} <= played  # every trade made by clicks

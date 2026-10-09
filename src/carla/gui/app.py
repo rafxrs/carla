@@ -1,8 +1,9 @@
 """Arcade front-end: play a seat against bots, watch bots play, or replay a recorded game.
 
 Play: the human seat is a `HumanAgent` fed by clicks on highlighted legal targets (corners,
-edges, tiles from `game.legal_actions()`) and by buttons and pickers (`controller.Controller`);
-the other seats are any registered agents, moving on the update tick after a configurable delay.
+edges, tiles from `game.legal_actions()`), buttons, pickers, hand cards and the trade panel
+(`controller.Controller`); the other seats are any registered agents, moving on the update tick
+after a configurable delay.
 Watch / replay: step through a `GameRecord` (position k is `record.replay(k)`) with play/pause,
 step, seek and speed controls, beside a log of `describe_event` lines.
 
@@ -25,7 +26,7 @@ from carla.engine.rng import derive_seed
 from carla.engine.state import Phase
 from carla.gui import theme
 from carla.gui.board_view import BoardMarks, BoardView
-from carla.gui.controller import Controller
+from carla.gui.controller import Controller, TradePanel, negotiation_panel
 from carla.gui.geometry import Rect, compute_layout
 from carla.gui.panels import (
     HandBar,
@@ -40,6 +41,7 @@ from carla.gui.panels import (
 )
 from carla.gui.render import Layer, Painter
 from carla.gui.session import GameSession, HumanAgent, Pacer
+from carla.gui.trade import TradeLayout, draw_trade, layout_trade, trade_tooltip
 from carla.gui.widgets import (
     Button,
     PickerLayout,
@@ -97,14 +99,13 @@ KEY_COMMANDS = {
     101: "end_turn",  # e
     98: "buy_dev",  # b
     100: "play_dev",  # d
-    116: "bank_trade",  # t
-    112: "trade",  # p
+    116: "trade",  # t
     115: "save",  # s
     110: "new_game",  # n
 }
 DIGIT_KEYS = {**{48 + i: i for i in range(1, 10)}, **{65456 + i: i for i in range(1, 10)}}
 MOUSE_LEFT, MOUSE_RIGHT = 1, 4
-PLAY_COMMANDS = ("roll", "end_turn", "buy_dev", "play_dev", "bank_trade", "trade")
+PLAY_COMMANDS = ("roll", "end_turn", "buy_dev", "play_dev")
 FLASH_SECONDS = 1.6
 MESSAGE_SECONDS = 4.0
 _TRANSPORT = (
@@ -127,14 +128,14 @@ HELP_LINES = (
     ("← / →", "step back / forward"),
     ("Home / End", "first / last position (End returns to the live game)"),
     ("+ / −", "faster / slower"),
-    ("R  E  B  D  T", "roll, end turn, buy and play development cards, bank trade"),
-    ("P", "offer a trade (when domestic trade is enabled)"),
-    ("1 – 9", "choose an option of the open dialog"),
-    ("Esc", "cancel the dialog, close this help"),
+    ("R  E  B  D", "roll, end turn, buy and play development cards"),
+    ("T", "open or close the trade panel"),
+    ("1 – 9", "choose an option of the open dialog or trade panel"),
+    ("Esc", "cancel the dialog or trade, close this help"),
     ("S  /  N", "save the game record / start a new game"),
     ("H", "show or hide this help"),
     ("Mouse", "click highlighted spots; the wheel scrolls the log; drag the top bar to seek"),
-    ("Cards", "click a development card in your hand to play it"),
+    ("Cards", "click a development card to play it, a resource card to trade it"),
 )
 
 
@@ -169,7 +170,7 @@ class GuiApp:
         self.window: arcade.Window | None = None
         self.painter: Painter | None = None
         seat = options.seat if self.mode == "play" else -1
-        self.controller = Controller(seat, options.engine.allow_domestic_trade)
+        self.controller = Controller(seat)
         self.session = self._new_session()
         self._sync()
 
@@ -232,15 +233,19 @@ class GuiApp:
         self.message, self._message_time = message, self.time
 
     def act(self, action: Action | None) -> None:
-        """Play the human's completed `action` (None: input still incomplete)."""
+        """Play the human's completed `action` (None: input still incomplete), then the rest of
+        a multi-card bank trade."""
         if action is None:
             return
-        try:
-            self.session.submit(action)
-        except (IllegalActionError, NotImplementedError, RuntimeError) as exc:
-            self.notify(f"Not possible: {exc}")
-        self.pacer.restart()
-        self._sync()
+        for a in (action, *self.controller.take_queued()):
+            try:
+                self.session.submit(a)
+            except (IllegalActionError, NotImplementedError, RuntimeError) as exc:
+                self.notify(f"Not possible: {exc}")
+                break
+            finally:
+                self.pacer.restart()
+                self._sync()
 
     def command(self, name: str) -> None:
         """Run a button or keyboard command."""
@@ -248,6 +253,9 @@ class GuiApp:
         if name in PLAY_COMMANDS:
             if self.live_play:
                 self.act(self.controller.press(name))
+        elif name == "trade":
+            if self.live_play:
+                self.controller.toggle_trade()
         elif name == "play_pause":
             self.pacer.playing = not self.pacer.playing
             if self.pacer.playing and s.at_end and not s.can_extend and s.length:
@@ -366,6 +374,12 @@ class GuiApp:
         if self.controller.picker is not None:
             self._click_picker(x, y)
             return
+        trade = self.trade_layout()
+        if trade is not None and trade.panel.contains(x, y):
+            key = trade.key_at(x, y)
+            if key is not None:
+                self.act(self.controller.choose_trade(key))
+            return
         hit = button_at(self.buttons(), x, y)
         if hit is not None:
             if hit.enabled:
@@ -373,8 +387,10 @@ class GuiApp:
             return
         card = self.hand_bar().card_at(x, y)
         if card is not None:
-            if card.playable:
+            if card.playable and card.kind == "dev":
                 self.act(self.controller.play_card(card.index))
+            elif card.playable:
+                self.controller.offer_card(card.index)
             return
         slider = self.slider()
         if slider is not None and slider.rect.inset(-6, -10).contains(x, y):
@@ -402,7 +418,7 @@ class GuiApp:
             self.log_view.scroll = max(0, self.log_view.scroll + round(scroll_y * 3))
 
     def on_key_press(self, symbol: int, modifiers: int) -> bool:
-        if symbol in DIGIT_KEYS and self.controller.picker is not None:
+        if symbol in DIGIT_KEYS and self.controller.active:
             self.act(self.controller.choose_index(DIGIT_KEYS[symbol] - 1))
         elif symbol in KEY_COMMANDS:
             self.command(KEY_COMMANDS[symbol])
@@ -443,6 +459,9 @@ class GuiApp:
         x, y = self.mouse
         c, tr = self.controller, self.board.transform
         if not c.active or not self.layout.viewport.contains(x, y) or self.results or self.help:
+            return None
+        trade = self.trade_layout()
+        if trade is not None and trade.panel.contains(x, y):
             return None
         corner = tr.corner_at(x, y, c.corner_targets())
         if corner is not None:
@@ -487,9 +506,24 @@ class GuiApp:
     def hand_bar(self) -> HandBar:
         """The bottom bar: the human's hand in Play mode (with the action buttons while the
         game runs), else the hand of the seat to act, read-only."""
-        actions = self.controller.buttons() if self.live_play else None
-        playable = self.controller.playable_cards()
-        return layout_hand_bar(self.layout.hand, hand_view(self.session), actions, playable)
+        c = self.controller
+        actions = c.buttons() if self.live_play else None
+        hand = hand_view(self.session, c.offer[0])
+        return layout_hand_bar(
+            self.layout.hand, hand, actions, c.playable_cards(), c.offerable_cards()
+        )
+
+    def trade_panel(self) -> TradePanel | None:
+        """The human's trade (an offer being composed, or a decision about one), else the
+        negotiation of the position shown, read-only."""
+        panel = self.controller.trade_panel()
+        if panel is None:
+            panel = negotiation_panel(self.session.game.state, self.session.viewer)
+        return panel
+
+    def trade_layout(self) -> TradeLayout | None:
+        panel = self.trade_panel()
+        return None if panel is None else layout_trade(panel, self.layout.viewport)
 
     def slider(self) -> Slider | None:
         """The seek bar between the steps and the speed, if the window leaves room for it."""
@@ -581,6 +615,11 @@ class GuiApp:
         draw_side_panel(ui, layout.side, panel_view(s))
         self.log_view.draw(ui, layout.log, s)
         layers.append(ui)
+        panel = self.trade_panel()
+        if panel is not None:
+            trade = Layer("trade")
+            draw_trade(trade, panel, layout_trade(panel, layout.viewport), self.mouse)
+            layers.append(trade)
         tooltip = self._tooltip_layer()
         if tooltip is not None:
             layers.append(tooltip)
@@ -616,14 +655,19 @@ class GuiApp:
         open."""
         if self.help or self.results or self.controller.picker is not None:
             return None
-        bar = self.hand_bar()
+        bar, trade = self.hand_bar(), self.trade_layout()
         card = bar.card_at(*self.mouse)
         tile = None if bar.labelled else button_at(bar.buttons, *self.mouse)
-        if card is not None:
+        traded = trade.card_at(*self.mouse) if trade is not None else None
+        if traded is not None:
+            text, rect = trade_tooltip(*traded), traded[0].rect
+        elif card is not None:
             text, rect = card_tooltip(card), card.rect
         elif tile is not None:
             text, rect = f"{tile.label} ({tile.hotkey})", tile.rect
         else:
+            return None
+        if not text:
             return None
         layer = Layer("tooltip")
         draw_tooltip(layer, text, rect.cx, rect.top + 4, self.layout.board)
@@ -640,7 +684,7 @@ class GuiApp:
         hovered = option.key if option is not None else None
         if layout.cancel is not None and layout.cancel.contains(x, y):
             hovered = "cancel"
-        draw_picker(layer, picker, layout, hovered, self.controller.offer)
+        draw_picker(layer, picker, layout, hovered)
         return layer
 
     def _results_layer(self) -> Layer:

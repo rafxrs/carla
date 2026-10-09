@@ -113,8 +113,9 @@ def panel_view(session: GameSession) -> PanelView:
     )
 
 
-def hand_view(session: GameSession) -> HandView:
-    """The hand the bottom bar shows: the human's in Play mode, else the seat to act's."""
+def hand_view(session: GameSession, offered: Sequence[int] = ()) -> HandView:
+    """The hand the bottom bar shows: the human's in Play mode (less the cards `offered` in the
+    trade panel), else the seat to act's."""
     s, viewer = session.game.state, session.viewer
     if viewer is not None:
         focus, title = viewer, "Your hand"
@@ -124,7 +125,9 @@ def hand_view(session: GameSession) -> HandView:
     held = s.dev_hands[focus]
     new = s.dev_bought_this_turn if focus == s.current_player else [0] * len(held)
     dev = tuple((d, held[d], new[d]) for d in DevCard if held[d])
-    return HandView(focus, title, tuple(s.hands[focus]), dev)
+    offered = offered or (0,) * NUM_RESOURCES
+    resources = tuple(n - k for n, k in zip(s.hands[focus], offered, strict=True))
+    return HandView(focus, title, resources, dev)
 
 
 # ------------------------------------------------------------------ text helpers
@@ -277,8 +280,6 @@ def _draw_bank(layer: Layer, r: Rect, view: PanelView) -> None:
 # ------------------------------------------------------------------ hand bar
 
 _ACTIONS = (
-    ("bank_trade", "Trade", "trade"),
-    ("trade", "Offer", "trade"),
     ("buy_dev", "Buy dev", "buy_card"),
     ("roll", "Roll", "dice"),
     ("end_turn", "End turn", "hourglass"),
@@ -326,10 +327,12 @@ def layout_hand_bar(
     hand: HandView,
     actions: Sequence[ButtonSpec] | None = None,
     playable: frozenset[int] = frozenset(),
+    offerable: frozenset[int] = frozenset(),
 ) -> HandBar:
     """Lay out `hand` in `rect`; `actions` (the controller's buttons) adds the action tiles,
-    `playable` marks the development cards a click plays. Cards shrink, then development
-    cards overlap, when the bar is too narrow."""
+    `playable` marks the development cards a click plays and `offerable` the resources a click
+    puts in a trade. Cards shrink, then development cards overlap, when the bar is too
+    narrow."""
     inner = rect.inset(_PAD)
     specs = {spec.id: spec for spec in actions or ()}
     shown = [(specs[name], label, icon) for name, label, icon in _ACTIONS if name in specs]
@@ -356,7 +359,13 @@ def layout_hand_bar(
     h = w / CARD_RATIO
     y = area.y + (area.h - h) / 2
     cards = [
-        Card("resource", r, hand.resources[r], Rect(area.x + r * (w + _GAP), y, w, h))
+        Card(
+            "resource",
+            r,
+            hand.resources[r],
+            Rect(area.x + r * (w + _GAP), y, w, h),
+            playable=r in offerable and hand.resources[r] > 0,
+        )
         for r in range(NUM_RESOURCES)
     ]
     separator = area.x + NUM_RESOURCES * (w + _GAP) - _GAP + _SEP / 2
@@ -402,7 +411,7 @@ def draw_hand_bar(layer: Layer, bar: HandBar, mouse: Point = (-1.0, -1.0)) -> No
 def card_tooltip(card: Card) -> str:
     """What a hovered card says about itself."""
     if card.kind == "resource":
-        return f"{card.label} ×{card.count}"
+        return f"{card.label} ×{card.count}" + (": click to trade" if card.playable else "")
     if card.dimmed:
         return f"{card.label}: bought this turn"
     if card.playable:
