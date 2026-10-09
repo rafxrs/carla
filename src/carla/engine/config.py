@@ -40,8 +40,17 @@ class EngineConfig:
                 raise ValueError(f"{name} must be a non-negative integer or None where allowed")
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        """All fields, except the limits added with domestic trade while it is off: a game
+        without it serializes (and hashes) exactly as before, so older records still replay."""
+        out = asdict(self)
+        if not self.allow_domestic_trade:
+            for name in _ADDED_WITH_TRADE:
+                del out[name]
+        return out
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "EngineConfig":
         return cls(**data)
+
+
+_ADDED_WITH_TRADE = ("max_domestic_trades_per_turn", "max_trade_cards_per_side")

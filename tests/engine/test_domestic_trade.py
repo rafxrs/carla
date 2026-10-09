@@ -12,7 +12,8 @@ from carla.engine.constants import NUM_RESOURCES, RESOURCE_CARDS_PER_TYPE
 from carla.engine.events import EventKind
 from carla.engine.game import Game, IllegalActionError
 from carla.engine.record import GameRecord
-from carla.engine.state import Phase
+from carla.engine.simulate import play_random_game
+from carla.engine.state import GameState, Phase
 from carla.eval.metrics import trade_metrics
 from carla.eval.runner import GameResult
 from tests.engine.scenario import (
@@ -329,3 +330,19 @@ def test_trade_config_limits_must_be_nonnegative():
         limits: dict[str, Any] = {field: -1}
         with pytest.raises(ValueError, match="non-negative integer"):
             EngineConfig(**limits)
+
+
+def test_games_without_domestic_trade_serialize_as_before_it_existed():
+    record = GameRecord.from_game(play_random_game(5))
+    assert record.hashes is not None  # computed by the engine before domestic trade was added:
+    assert (len(record.hashes), record.hashes[0], record.hashes[100], record.hashes[-1]) == (
+        609,
+        "cce7db5bb979f437",
+        "cc933945038f6622",
+        "7e6eb11e67f22075",
+    )
+    plain = record.replay().state.to_dict()
+    assert "trade_responses" not in plain and "max_trade_cards_per_side" not in plain["config"]
+    assert GameState.from_dict(plain).to_dict() == plain
+    trading = Game(EngineConfig(allow_domestic_trade=True)).state.to_dict()
+    assert trading["trade_responses"] == 0 and trading["config"]["max_trade_cards_per_side"] == 4
