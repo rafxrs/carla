@@ -75,7 +75,8 @@ class GuiOptions:
     """Seconds between automatic moves at speed 1×."""
     seed: int = 0
     """Experiment seed: the i-th game of the window uses `derive_seed(seed, "game", i)`."""
-    engine: EngineConfig = field(default_factory=EngineConfig)
+    engine: EngineConfig = field(default_factory=lambda: EngineConfig(allow_domestic_trade=True))
+    """Rules of new games; players trade with each other unless `allow_domestic_trade` is off."""
     output_dir: Path = Path("runs")
     """Saved game records go to `output_dir/gui`."""
 

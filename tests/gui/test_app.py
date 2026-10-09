@@ -281,6 +281,11 @@ def test_resize_and_log_scrolling():
     assert not app.on_key_press(ord("z"), 0)  # unknown keys are left to the window
 
 
+def test_players_trade_unless_turned_off():
+    assert play_app().session.game.config.allow_domestic_trade
+    assert not play_app(engine=EngineConfig()).session.game.config.allow_domestic_trade
+
+
 def test_invalid_options():
     with pytest.raises(ValueError, match="mode"):
         GuiApp(GuiOptions(mode="spectate"))
