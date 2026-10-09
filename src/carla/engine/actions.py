@@ -22,7 +22,7 @@ class ActionType(IntEnum):
     MOVE_ROBBER = 7
     DISCARD = 8
     MARITIME_TRADE = 9
-    # Domestic trade: propose or invite -> responses/counteroffers -> confirm/cancel.
+    # Domestic trade (protocol in `rules`): open, answer, conclude.
     PROPOSE_TRADE = 10
     ACCEPT_TRADE = 11
     REJECT_TRADE = 12
@@ -35,7 +35,8 @@ NUM_ACTION_TYPES = len(ActionType)
 
 
 class TradeOffer(NamedTuple):
-    """Per-resource counts the acting offer maker gives and wants."""
+    """Domestic trade terms from the side of the seat offering them: cards per resource it
+    gives and wants."""
 
     give: tuple[int, ...]
     receive: tuple[int, ...]
@@ -54,9 +55,9 @@ class Action(NamedTuple):
     MOVE_ROBBER       tile, player = victim to steal from (-1 when nobody can be robbed)
     DISCARD           resource (one card per decision)
     MARITIME_TRADE    resource = given type, resource2 = received type (ratio from ports)
-    PROPOSE_TRADE     trade
-    INVITE_TRADE      no fields; ask the other players for offers
-    CONFIRM_TRADE     player = accepting partner
+    PROPOSE_TRADE     trade (an offer in MAIN, a counteroffer in TRADE_RESPONSE)
+    INVITE_TRADE      no fields; asks the other players for offers
+    CONFIRM_TRADE     player = partner whose acceptance or counteroffer is taken
     ================  =====================================================================
 
     `player` is an absolute seat; environments convert it to a seat relative to the actor.
@@ -131,24 +132,21 @@ ACCEPT_TRADE = Action(ActionType.ACCEPT_TRADE)
 REJECT_TRADE = Action(ActionType.REJECT_TRADE)
 CANCEL_TRADE = Action(ActionType.CANCEL_TRADE)
 INVITE_TRADE = Action(ActionType.INVITE_TRADE)
+_ONE_CARD = tuple(tuple(int(r == i) for r in range(NUM_RESOURCES)) for i in range(NUM_RESOURCES))
+"""_ONE_CARD[r]: a single card of resource r, as counts per resource."""
 ONE_FOR_ONE = tuple(
     tuple(
         (
-            Action(
-                ActionType.PROPOSE_TRADE,
-                trade=TradeOffer(
-                    tuple(int(i == give) for i in range(NUM_RESOURCES)),
-                    tuple(int(i == receive) for i in range(NUM_RESOURCES)),
-                ),
-            )
-            if give != receive
+            Action(ActionType.PROPOSE_TRADE, trade=TradeOffer(_ONE_CARD[g], _ONE_CARD[r]))
+            if g != r
             else None
         )
-        for receive in range(NUM_RESOURCES)
+        for r in range(NUM_RESOURCES)
     )
-    for give in range(NUM_RESOURCES)
+    for g in range(NUM_RESOURCES)
 )
-"""One-for-one offers exposed to the baseline policy; the engine accepts any valid offer."""
+"""ONE_FOR_ONE[give][receive]: the offers `legal_actions` enumerates; None on the diagonal. Any
+other valid offer is legal too (`rules.legal_trade_offer`)."""
 CONFIRM_TRADE_WITH = tuple(Action(ActionType.CONFIRM_TRADE, player=p) for p in range(NUM_PLAYERS))
 
 ALL_ACTIONS: tuple[Action, ...] = (

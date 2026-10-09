@@ -3,7 +3,7 @@
 The controller never decides what is legal: highlighted targets, enabled buttons and picker
 options come from the legal actions passed to `reset`. Trades start from the hand: clicking a
 resource card puts it in an offer, which goes to the bank (as maritime trades) or to the other
-players (checked with the engine's `valid_trade_offer`, since multi-card offers are not
+players (checked with the engine's `legal_trade_offer`, since multi-card offers are not
 enumerated).
 """
 
@@ -13,7 +13,7 @@ from typing import NamedTuple
 from carla.engine import actions as A
 from carla.engine.actions import Action, ActionType, TradeOffer
 from carla.engine.constants import NUM_PLAYERS, NUM_RESOURCES, RESOURCE_CARDS_PER_TYPE, DevCard
-from carla.engine.rules import trade_ratios, valid_trade_offer
+from carla.engine.rules import legal_trade_offer, trade_ratios
 from carla.engine.state import GameState, Phase
 from carla.gui.theme import DEV_LABELS, RESOURCE_LABELS
 
@@ -373,7 +373,7 @@ class Controller:
         hand, give, get = self._hand(), self._give, self._get
         if self._trade == "counter":
             limit = s.config.max_trade_cards_per_side
-            if limit and sum(give) >= limit:
+            if limit is not None and sum(give) >= limit:
                 return frozenset()
         elif not self._trade and not self._can_trade():
             return frozenset()
@@ -589,7 +589,8 @@ class Controller:
         """Most cards the offer may ask for: the players' limit per side, or what the bank
         would give for the whole hand."""
         assert self.state is not None
-        limit = self.state.config.max_trade_cards_per_side or RESOURCE_CARDS_PER_TYPE
+        limit = self.state.config.max_trade_cards_per_side
+        limit = RESOURCE_CARDS_PER_TYPE if limit is None else limit
         if self._trade == "counter":
             return limit
         kinds = self._by_type
@@ -603,8 +604,7 @@ class Controller:
         assert s is not None
         kinds = self._by_type
         give, get = tuple(self._give), tuple(self._get)
-        terms = TradeOffer(give, get)
-        valid = _T.PROPOSE_TRADE in kinds and valid_trade_offer(s, terms)
+        valid = legal_trade_offer(s, Action(_T.PROPOSE_TRADE, trade=TradeOffer(give, get)))
         cap = self._get_cap()
         wants = tuple(not give[r] and sum(get) < cap for r in _RESOURCES)
         if self._trade == "counter":
@@ -639,7 +639,8 @@ class Controller:
         if not any(get):
             hint = "Pick the cards you want · " + hint
         limit = self.state.config.max_trade_cards_per_side
-        if _T.PROPOSE_TRADE in self._by_type and limit and max(sum(give), sum(get)) > limit:
+        over = limit is not None and max(sum(give), sum(get)) > limit
+        if _T.PROPOSE_TRADE in self._by_type and over:
             hint += f" · players: {limit} cards a side at most"
         return hint
 

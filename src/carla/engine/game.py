@@ -116,15 +116,10 @@ class Game:
         return self._legal
 
     def is_legal(self, action: Action) -> bool:
+        if action.type == ActionType.PROPOSE_TRADE:  # checked, not enumerated (multi-card)
+            return rules.legal_trade_offer(self.state, action)
         if self._legal_set is None:
             self._legal_set = frozenset(self.legal_actions())
-        if action.type == ActionType.PROPOSE_TRADE:
-            return (
-                type(action.type) is ActionType
-                and action == Action(ActionType.PROPOSE_TRADE, trade=action.trade)
-                and (rules.can_propose_trade(self.state) or rules.can_counter_trade(self.state))
-                and rules.valid_trade_offer(self.state, action.trade)
-            )
         return action in self._legal_set
 
     # ------------------------------------------------------------------ transitions

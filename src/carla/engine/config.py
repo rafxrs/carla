@@ -6,7 +6,8 @@ from typing import Any
 
 @dataclass(frozen=True)
 class EngineConfig:
-    """Rule knobs. Domestic trading is opt-in; its finite defaults bound experiments."""
+    """Rule knobs. Defaults are the official 4-player base game, without domestic trade (the
+    trade limits are experiment controls, not rules from the rulebook)."""
 
     vp_to_win: int = 10
     discard_limit: int = 7
@@ -14,13 +15,13 @@ class EngineConfig:
     max_turns: int | None = None
     """End the game without a winner after this many player turns (None: play to the end)."""
     allow_domestic_trade: bool = False
-    """Enable player-to-player trading during the main phase."""
+    """Player-to-player trading in the main phase (protocol in `rules`)."""
     max_trade_proposals_per_turn: int | None = 3
-    """Maximum negotiations initiated in one turn. None removes the limit; 0 disables them."""
+    """Negotiations (offers and invitations) the current player may open per turn (None: no limit)."""
     max_domestic_trades_per_turn: int | None = 3
-    """Maximum completed player-to-player trades in one turn. None removes the limit."""
-    max_trade_cards_per_side: int = 4
-    """Maximum cards given or requested in one offer. Set to 0 for no limit."""
+    """Domestic trades the current player may complete per turn (None: no limit)."""
+    max_trade_cards_per_side: int | None = 4
+    """Cards an offer or counteroffer may give, and may ask for (None: no limit; at least 1)."""
     board_seed: int | None = None
     """Use the same board in every game (generated from this seed) instead of one per game seed."""
     forbid_adjacent_red_numbers: bool = True
@@ -28,23 +29,18 @@ class EngineConfig:
     2/12); False shuffles them freely."""
 
     def __post_init__(self) -> None:
-        for name in (
-            "max_trade_proposals_per_turn",
-            "max_domestic_trades_per_turn",
-            "max_trade_cards_per_side",
-        ):
+        for name in _TRADE_LIMITS:
             value = getattr(self, name)
-            if value is None and name != "max_trade_cards_per_side":
-                continue
-            if type(value) is not int or value < 0:
-                raise ValueError(f"{name} must be a non-negative integer or None where allowed")
+            low = 1 if name == "max_trade_cards_per_side" else 0  # an offer has a card a side
+            if value is not None and (type(value) is not int or value < low):
+                raise ValueError(f"{name} must be None or an integer >= {low}, not {value!r}")
 
     def to_dict(self) -> dict[str, Any]:
         """All fields, except the limits added with domestic trade while it is off: a game
         without it serializes (and hashes) exactly as before, so older records still replay."""
         out = asdict(self)
         if not self.allow_domestic_trade:
-            for name in _ADDED_WITH_TRADE:
+            for name in _TRADE_LIMITS[1:]:
                 del out[name]
         return out
 
@@ -53,4 +49,9 @@ class EngineConfig:
         return cls(**data)
 
 
-_ADDED_WITH_TRADE = ("max_domestic_trades_per_turn", "max_trade_cards_per_side")
+_TRADE_LIMITS = (
+    "max_trade_proposals_per_turn",
+    "max_domestic_trades_per_turn",
+    "max_trade_cards_per_side",
+)
+"""The first one predates domestic trade (it was reserved for it), the others came with it."""

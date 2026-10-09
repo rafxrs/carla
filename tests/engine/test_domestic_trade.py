@@ -328,8 +328,21 @@ def test_trade_config_limits_must_be_nonnegative():
         "max_trade_cards_per_side",
     ):
         limits: dict[str, Any] = {field: -1}
-        with pytest.raises(ValueError, match="non-negative integer"):
+        with pytest.raises(ValueError, match="must be None or an integer"):
             EngineConfig(**limits)
+    with pytest.raises(ValueError, match="max_trade_cards_per_side"):
+        EngineConfig(max_trade_cards_per_side=0)  # no offer could be made
+    assert EngineConfig(max_trade_proposals_per_turn=0).max_trade_proposals_per_turn == 0
+
+
+def test_offer_size_limit_none_is_unlimited():
+    game = trade_game()
+    give(game, 0, (3, 0, 0, 0, 0))
+    big = offer((5, 0, 0, 0, 0), (0, 1, 1, 1, 1))
+    assert not game.is_legal(big)  # five cards given, four allowed
+    unlimited = trade_game(EngineConfig(allow_domestic_trade=True, max_trade_cards_per_side=None))
+    give(unlimited, 0, (3, 0, 0, 0, 0))
+    assert unlimited.is_legal(big)
 
 
 def test_games_without_domestic_trade_serialize_as_before_it_existed():

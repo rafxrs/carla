@@ -114,7 +114,7 @@ def describe_event(event: Event, board: Board) -> str:
     if k == EventKind.GAME_OVER:
         return f"{p} wins!" if event.player >= 0 else "Game stopped at the turn limit (no winner)"
     if k == EventKind.TRADE_PROPOSED:
-        return f"{p} offers {resources_text(event.give)} " f"for {resources_text(event.receive)}"
+        return f"{p} offers {resources_text(event.give)} for {resources_text(event.receive)}"
     if k == EventKind.TRADE_INVITED:
         return f"{p} invites trade offers"
     if k == EventKind.TRADE_COUNTERED:
