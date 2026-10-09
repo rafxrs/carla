@@ -21,7 +21,7 @@ from carla.envs import (
 )
 from carla.envs.action_space import HEAD_INDEX, HEAD_SIZES, heads_used
 from carla.envs.observation import TRADE_BASE_FEATURES
-from tests.engine.scenario import give, post_setup_game
+from tests.engine.scenario import give, one_for_one, post_setup_game
 
 
 def all_mask_decisions(masks, actor):
@@ -96,7 +96,7 @@ def test_trade_masks_cover_the_baseline_offers_and_responses():
         build_masks((larger,), 0)
     with pytest.raises(ValueError, match="one-for-one"):
         encode_action(larger, 0)
-    game.step(A.ONE_FOR_ONE[0][1])
+    game.step(one_for_one(0, 1))
     obs = ObservationEncoder().encode(game, 0)
     assert obs["trade_context"][0] == obs["trade_context"][6] == 0.25
     assert not obs["masks"]["type"].any()  # the proposer is waiting for responses
@@ -121,7 +121,7 @@ def test_invitation_and_counteroffer_masks_and_public_observation():
     assert responder_masks["type"][A.ActionType.PROPOSE_TRADE]
     assert not responder_masks["type"][A.ActionType.ACCEPT_TRADE]
     assert all_mask_decisions(responder_masks, 1) == set(legal)
-    game.step(A.ONE_FOR_ONE[1][0])
+    game.step(one_for_one(1, 0))
     obs = ObservationEncoder().encode(game, 0)
     start = TRADE_BASE_FEATURES + 2 * 5  # responder seat 1 relative to observer seat 0
     assert obs["trade_context"][start + 1] == 0.25
