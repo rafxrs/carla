@@ -33,7 +33,7 @@ perspective.
 | `allow_domestic_trade` | `False` | Enables the protocol in the main phase (on in the GUI unless `--no-trading`). |
 | `max_trade_proposals_per_turn` | 3 | Negotiation rounds started by the active player, including invitations and cancelled rounds. `None` removes the cap; `0` disables rounds. |
 | `max_domestic_trades_per_turn` | 3 | Completed exchanges on the active player's turn. `None` removes the cap; `0` prevents new rounds. |
-| `max_trade_cards_per_side` | 4 | Cards given or requested in one proposal or counteroffer. `0` removes the cap. |
+| `max_trade_cards_per_side` | 4 | Cards given or requested in one proposal or counteroffer, at least 1. `None` removes the cap. |
 
 These are configurable experiment controls. The [CATAN rulebook](https://www.catan.com/sites/default/files/2025-03/CN3081%20CATAN%E2%80%93The%20Game%20Rulebook%20secure%20%281%29.pdf)
 does not impose these numerical limits. Counters do not consume another round slot; all three other players get one response
@@ -61,12 +61,14 @@ bank is unaffected by domestic exchanges.
 - `give` and `receive` are five-element tuples of nonnegative integers, each with at
   least one card. Boolean counts and mutable-list vectors are rejected.
 - One resource cannot appear on both sides of the same offer. Each side respects
-  `max_trade_cards_per_side` when its value is nonzero.
+  `max_trade_cards_per_side` unless it is `None`.
 - The offer maker must hold everything they promise. The engine does not reject a
   proposal merely because an opponent lacks requested cards; doing so would expose
   a hidden hand. Acceptance checks only the responder's own hand.
-- Confirmation rechecks both hands. `Game.is_legal()` validates custom multi-card
-  proposals, including canonical unused action fields and the action type.
+- Hands cannot change during a negotiation, so these checks still hold when the
+  active player concludes; taking a counteroffer also requires that player to hold
+  the cards it asks for. `Game.is_legal()` checks any submitted offer with
+  `rules.legal_trade_offer()`, including the action type and unused fields.
 - Offers, answers, and executed terms are public. Other players' resource
   compositions and development-card identities remain hidden from observations
   and masks. Retrospective evaluation can inspect hidden hands in recorded games.
@@ -86,11 +88,19 @@ bank is unaffected by domestic exchanges.
 counteroffers, response progress, and per-turn counts. Snapshots and serialized state
 preserve these fields. Public trade events appear in records, so saved games can be
 replayed to the same state. `current_player` remains the turn owner while
-`decision_player` moves through the opponents during responses.
+`decision_player` moves through the opponents during responses. In `rules.py`, each
+trade action has its own handler, like every other action; `_open_negotiation`,
+`_next_answer` and `_close_negotiation` move a round between the phases.
+
+Without domestic trade, `GameState.to_dict()` leaves out the negotiation fields and
+`EngineConfig.to_dict()` the limits added with domestic trade. Such games serialize,
+and hash, exactly as before domestic trade existed, so records saved earlier still
+replay.
 
 `legal_actions()` enumerates the fixed one-for-one subset that the current policy
-can represent. `Game.is_legal()` additionally validates submitted multi-card offers
-through `valid_trade_offer()`. An engine or GUI offer can therefore be legal without
+can represent. `Game.is_legal()` additionally accepts any offer that
+`legal_trade_offer()` allows: a valid offer (`valid_trade_offer()`) that opens a
+negotiation or answers one. An engine or GUI offer can therefore be legal without
 appearing in the enumerable policy list. `build_masks()` and `encode_action()`
 explicitly reject multi-card offers instead of dropping extra cards.
 
@@ -148,7 +158,7 @@ The README has simulation and tournament commands for non-GUI runs.
 
 1. **Variable-length neural offers.** Add a decoder that chooses legal `give` and
    `receive` count vectors using the acting hand and public state. Keep
-   `valid_trade_offer()` as the final engine check. Update model sampling, action
+   `legal_trade_offer()` as the final engine check. Update model sampling, action
    encoding, and tests together; the current `(give resource, receive resource)`
    mask cannot represent extra cards without losing information.
 2. **Better trading agents.** Use the existing response and confirmation phases,
@@ -162,8 +172,8 @@ The README has simulation and tournament commands for non-GUI runs.
    separate project work.
 4. **New rules or limits.** Change typed `EngineConfig`, the initiation checks,
    and the offer validator together, then expose the setting in an experiment
-   YAML. Preserve the one-response-per-seat bound and confirmation hand recheck
-   if the protocol changes. Label experiment controls as such.
+   YAML. Preserve the one-response-per-seat bound and the hand checks if the
+   protocol changes. Label experiment controls as such.
 5. **New measurements or UI choices.** Derive outcome metrics from recorded
    games and public events; keep private-hand analysis retrospective. Use the
    existing picker and theme helpers for UI additions.

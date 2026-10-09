@@ -144,6 +144,9 @@ stateDiagram-v2
     MAIN --> MOVE_ROBBER: knight
     MAIN --> ROAD_BUILDING: Road Building card
     ROAD_BUILDING --> MAIN
+    MAIN --> TRADE_RESPONSE: trade offer or invitation
+    TRADE_RESPONSE --> TRADE_CONFIRM: the three others answered
+    TRADE_CONFIRM --> MAIN: trade or cancel
     MAIN --> PRE_ROLL: end turn
     MAIN --> GAME_OVER: 10 VP or turn limit
 ```
