@@ -1,8 +1,6 @@
 # CARLA - Catan Advanced Reinforcement Learning Agent
 
 A powerful Deep RL catan agent.
-All code (game engine, RL, GUI, tests, etc.) was written from scratch and is intellectual property of Rafael Reis, Lucas Bessai, Suraj Vadulas and Dan Suissa.
-
 CARLA is being built to learn four-player Settlers of Catan by self-play PPO on top of its own deterministic rules engine (ECSE 552 course project, McGill).
 
 ## Status
@@ -172,7 +170,7 @@ stateDiagram-v2
 - **Own self-play env instead of PettingZoo.** `CatanAECEnv` follows the agent-environment-cycle pattern, and `CatanEnv` is the Gymnasium single-learner wrapper. The conditional masks do not fit PettingZoo's flat `action_mask`, and workers must choose the policy for each seat. An adapter can be added later.
 
 ## Contribute
-
+2026 - All code (game engine, RL, GUI, tests, etc.) was written from scratch and is intellectual property of Rafael Reis, Lucas Bessai, Suraj Vadulas and Dan Suissa.
 Starting Jan 2027, contributions are welcome - If you want to contribute to the project, fork the repository and submit a PR.
 
 ## References
