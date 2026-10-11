@@ -1,20 +1,20 @@
 # CARLA - Catan Advanced Reinforcement Learning Agent
 
 A powerful Deep RL catan agent.
-CARLA is being built to learn four-player Settlers of Catan by self-play PPO on top of its own deterministic rules engine (ECSE 552 course project, McGill).
+CARLA learns four-player Settlers of Catan by self-play PPO on top of its own deterministic rules engine.
 
 ## Status
 
 | Module    | Workstream | State                                                                                                                                                                                                                                                                                                             |
 | --------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `engine/` | engine     | **Implemented.** Base rules, maritime trade, and domestic proposals, invitations, counteroffers, confirmation, configurable limits, snapshots, deterministic replay, and logs. Larger offers are validated when submitted. |
-| `config/` | shared     | **Done.** Typed dataclasses, YAML `extends`, dotted overrides, strict validation.                                                                                                                                                                                                                                 |
-| `envs/`   | RL         | **Working v0.** Factored action heads and masks, including one-for-one offers, public trade context, rewards, self-play env, Gymnasium env. |
-| `agents/` | eval/bots  | **Working v0.** Random and heuristic bots, including domestic proposals and counteroffers when enabled. |
-| `eval/`   | eval/bots  | **Working.** Seeded tournaments with seat rotation and Wilson CIs, multi-process. Recorded games support trade feasibility, acceptance, and execution metrics. Plots: TODO. |
+| `engine/` | engine     | Base rules, maritime trade, and domestic proposals, invitations, counteroffers, confirmation, configurable limits, snapshots, deterministic replay, and logs. Larger offers are validated when submitted. |
+| `config/` | shared     | Typed dataclasses, YAML `extends`, dotted overrides, strict validation.                                                                                                                                                                                                                                 |
+| `envs/`   | RL         | Factored action heads and masks, including one-for-one offers, public trade context, rewards, self-play env, Gymnasium env. |
+| `agents/` | eval/bots  | Random and heuristic bots, including domestic proposals and counteroffers when enabled. |
+| `eval/`   | eval/bots  | Seeded tournaments with seat rotation and Wilson CIs, multi-process. Recorded games support trade feasibility, acceptance, and execution metrics. Plots: TODO. |
 | `models/` | models     | Masked factored distribution and MLP baseline handle one-for-one offers. GNN, set attention, belief module, and variable-length trade decoder remain TODOs. |
-| `rl/`     | RL         | GAE, rollout collection, checkpoints, `carla train` dry run **done**. PPO update, async workers, opponent pool: **interfaces + TODOs**.                                                                                                                                                                           |
-| `gui/`    | GUI        | **Implemented.** Arcade play, watch, and replay modes. Click resource cards to build a trade, then send it to the bank or the other players; offers, answers and counteroffers show their cards. Player trading is on unless `--no-trading`. |
+| `rl/`     | RL         | GAE, rollout collection, checkpoints, PPO update, async workers, opponent pool.                                                                                                                                                                           |
+| `gui/`    | GUI        | Arcade play, watch, and replay modes. Click resource cards to build a trade, then send it to the bank or the other players; offers, answers and counteroffers show their cards. Player trading is on unless `--no-trading`. |
 
 The domestic trade protocol, defaults, and extension points are documented in
 [docs/domestic_trading.md](docs/domestic_trading.md).
@@ -44,7 +44,7 @@ carla replay runs/games/game_0000.json.gz --step 120   # position after line #12
 carla tournament --config configs/bots.yaml            # win rates with 95% CIs
 carla config configs/experiments/gnn.yaml model.belief=gru   # print a resolved config
 carla train configs/smoke.yaml       # dry run until the PPO update lands
-carla gui --play --seat 0 --opponents heuristic   # needs the gui extra; H shows the shortcuts
+carla gui --play                   # needs the gui extra; play against 3 bots with trading on
 carla gui --play --no-trading                     # bank and port trades only
 carla gui --watch --opponents heuristic,random    # a live bot game with play/pause/step/seek
 carla gui runs/games/game_0000.json.gz            # replay a record
@@ -175,8 +175,23 @@ Starting Jan 2027, contributions are welcome - If you want to contribute to the 
 
 ## References
 
-Our learning was shaped and influenced by the brilliant contributions to the field of DRL, and Catan AIs:
+Our learning was shaped and influenced by the brilliant contributions to the fields of deep reinforcement learning and Catan AI:
 
-- [Settlers RL](https://settlers-rl.github.io/)
--
--
+**Catan AI**
+
+- [Settlers RL](https://settlers-rl.github.io/) - Henry Charlesworth. Deep RL for the full four-player game with player trading; the closest prior work to CARLA.
+- [Catanatron](https://github.com/bcollazo/catanatron) - Bryan Collazo. Fast open-source Catan simulator with value-function and alpha-beta bots.
+- [JSettlers2](https://github.com/jdmonin/JSettlers2) - Robert S. Thomas, Jeremy D. Monin et al. The classic Java Settlers client and its long-standing heuristic robot.
+- [Playing Catan with Cross-Dimensional Neural Network](https://doi.org/10.1007/978-3-030-63833-7_49) - Gendre and Kaneko (ICONIP 2020).
+- [Monte-Carlo Tree Search in Settlers of Catan](https://doi.org/10.1007/978-3-642-12993-3_3) - Szita, Chaslot and Spronck (ACG 2009).
+
+**Deep reinforcement learning**
+
+- [Proximal Policy Optimization Algorithms](https://arxiv.org/abs/1707.06347) - Schulman et al. (2017).
+- [High-Dimensional Continuous Control Using Generalized Advantage Estimation](https://arxiv.org/abs/1506.02438) - Schulman et al. (2016).
+- [Mastering the Game of Go with Deep Neural Networks and Tree Search](https://doi.org/10.1038/nature16961) - Silver et al. (Nature 2016).
+- [Dota 2 with Large Scale Deep Reinforcement Learning](https://arxiv.org/abs/1912.06680) - Berner et al. (OpenAI Five, 2019).
+- Policy Invariance Under Reward Transformations: Theory and Application to Reward Shaping - Ng, Harada and Russell (ICML 1999).
+- [Deep Reinforcement Learning That Matters](https://doi.org/10.1609/aaai.v32i1.11694) - Henderson et al. (AAAI 2018).
+- [Graph Representation Learning](https://www.cs.mcgill.ca/~wlh/grl_book/) - William L. Hamilton (2020).
+- [Attention Is All You Need](https://arxiv.org/abs/1706.03762) - Vaswani et al. (NeurIPS 2017).
