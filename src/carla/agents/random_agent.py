@@ -3,7 +3,8 @@
 from collections.abc import Sequence
 
 from carla.agents.base import Agent
-from carla.engine.actions import Action
+from carla.engine.actions import Action, ActionType, TradeOffer
+from carla.engine.constants import NUM_RESOURCES
 from carla.engine.game import Game
 from carla.engine.rng import Rng, derive_seed
 
@@ -25,4 +26,15 @@ class RandomAgent(Agent):
             types = sorted({a.type for a in legal})
             kind = types[self._rng.randbelow(len(types))]
             legal = [a for a in legal if a.type == kind]
-        return legal[self._rng.randbelow(len(legal))]
+        action = legal[self._rng.randbelow(len(legal))]
+        if action.type == ActionType.PROPOSE_TRADE:
+            hand = game.state.hands[seat]
+            available = [r for r, n in enumerate(hand) if n]
+            give_resource = available[self._rng.randbelow(len(available))]
+            receive_options = [r for r in range(NUM_RESOURCES) if r != give_resource]
+            receive_resource = receive_options[self._rng.randbelow(len(receive_options))]
+            give = [0] * NUM_RESOURCES
+            receive = [0] * NUM_RESOURCES
+            give[give_resource] = receive[receive_resource] = 1
+            return Action(ActionType.PROPOSE_TRADE, trade=TradeOffer(tuple(give), tuple(receive)))
+        return action

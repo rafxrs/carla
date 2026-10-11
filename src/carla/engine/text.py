@@ -55,6 +55,8 @@ def describe_action(action: Action, board: Board | None = None) -> str:
     if t == ActionType.PROPOSE_TRADE and action.trade is not None:
         give, receive = resources_text(action.trade.give), resources_text(action.trade.receive)
         return f"PROPOSE_TRADE give {give} for {receive}"
+    if t == ActionType.INVITE_TRADE:
+        return "INVITE_TRADE"
     return t.name
 
 
@@ -111,6 +113,26 @@ def describe_event(event: Event, board: Board) -> str:
         return f"{p} ends the turn"
     if k == EventKind.GAME_OVER:
         return f"{p} wins!" if event.player >= 0 else "Game stopped at the turn limit (no winner)"
+    if k == EventKind.TRADE_PROPOSED:
+        return f"{p} offers {resources_text(event.give)} " f"for {resources_text(event.receive)}"
+    if k == EventKind.TRADE_INVITED:
+        return f"{p} invites trade offers"
+    if k == EventKind.TRADE_COUNTERED:
+        return (
+            f"{p} offers {resources_text(event.give)} for "
+            f"{resources_text(event.receive)} to {seat(event.target)}"
+        )
+    if k == EventKind.TRADE_RESPONDED:
+        if event.value:
+            return f"{p} accepts {seat(event.target)}'s trade offer"
+        return f"{p} declines to trade with {seat(event.target)}"
+    if k == EventKind.TRADE_EXECUTED:
+        return (
+            f"{p} trades {resources_text(event.give)} for "
+            f"{resources_text(event.receive)} with {seat(event.target)}"
+        )
+    if k == EventKind.TRADE_CANCELLED:
+        return f"{p} ends trade negotiations"
     return f"{k.name} {event}"
 
 

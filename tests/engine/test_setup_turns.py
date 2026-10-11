@@ -88,6 +88,8 @@ def test_max_turns_truncates_without_winner():
         game.step(A.ROLL)
 
 
-def test_domestic_trade_flag_is_not_implemented_yet():
-    with pytest.raises(NotImplementedError):
-        Game(EngineConfig(allow_domestic_trade=True))
+def test_domestic_trade_can_be_enabled():
+    game = Game(EngineConfig(allow_domestic_trade=True))
+    assert game.config.max_trade_proposals_per_turn == 3
+    assert game.config.max_domestic_trades_per_turn == 3
+    assert game.config.max_trade_cards_per_side == 4

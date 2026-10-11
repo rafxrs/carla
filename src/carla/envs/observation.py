@@ -30,6 +30,8 @@ CORNER_FEATURES = 14  # settlement/city of each relative seat (8), port type (6)
 EDGE_FEATURES = 4  # road of each relative seat
 PLAYER_FEATURES = 16
 GLOBAL_FEATURES = len(Phase) + NUM_RESOURCES + 1 + 11 + 2 + 1 + 1 + NUM_RESOURCES
+TRADE_BASE_FEATURES = 2 * NUM_RESOURCES + NUM_PLAYERS + 2
+TRADE_FEATURES = TRADE_BASE_FEATURES + NUM_PLAYERS * 2 * NUM_RESOURCES
 EVENT_FEATURES = (
     NUM_EVENT_KINDS
     + 2 * (NUM_PLAYERS + 1)
@@ -38,6 +40,8 @@ EVENT_FEATURES = (
     + 11
     + NUM_RESOURCES
     + NUM_PLAYERS
+    + 1
+    + 2 * NUM_RESOURCES
 )
 
 _RESOURCE_EVENTS = (EventKind.DISCARDED, EventKind.RESOURCE_STOLEN, EventKind.MONOPOLY_TAKEN)
@@ -50,6 +54,8 @@ class ObservationEncoder:
     Keys and shapes: tiles (19, TILE_FEATURES), corners (54, CORNER_FEATURES),
     edges (72, EDGE_FEATURES), players (4, PLAYER_FEATURES), hand (5,) own resources,
     dev_cards (10,) own cards held + playable now, globals (GLOBAL_FEATURES,),
+    trade_context (TRADE_FEATURES,) public pending offer, acceptances, remaining limits and
+    counteroffers by relative seat,
     events (max_events, EVENT_FEATURES) + event_mask: public events since the observer's last
     decision (input of the belief module), masks: see `carla.envs.action_space`.
     """
@@ -72,6 +78,7 @@ class ObservationEncoder:
                 "hand": box(NUM_RESOURCES),
                 "dev_cards": box(2 * NUM_DEV_CARD_TYPES),
                 "globals": box(GLOBAL_FEATURES),
+                "trade_context": box(TRADE_FEATURES),
                 "events": box(self.max_events, EVENT_FEATURES),
                 "event_mask": spaces.MultiBinary(self.max_events),
                 "masks": spaces.Dict({k: spaces.MultiBinary(s) for k, s in MASK_SHAPES.items()}),
@@ -144,6 +151,36 @@ class ObservationEncoder:
         i += 4
         g[i : i + NUM_RESOURCES] = np.asarray(trade_ratios(s, observer)) / 4
 
+        trade_context = np.zeros(TRADE_FEATURES, dtype=np.float32)
+        if s.pending_trade is not None:
+            trade_context[:NUM_RESOURCES] = np.asarray(s.pending_trade.give) / 4
+            trade_context[NUM_RESOURCES : 2 * NUM_RESOURCES] = (
+                np.asarray(s.pending_trade.receive) / 4
+            )
+        offset = 2 * NUM_RESOURCES
+        for p in range(NUM_PLAYERS):
+            trade_context[offset + rel[p]] = s.trade_acceptances[p]
+        proposal_limit = s.config.max_trade_proposals_per_turn
+        trade_limit = s.config.max_domestic_trades_per_turn
+        trade_context[TRADE_BASE_FEATURES - 2] = (
+            1.0
+            if proposal_limit is None
+            else max(0, proposal_limit - s.trade_proposals_this_turn) / max(1, proposal_limit)
+        )
+        trade_context[TRADE_BASE_FEATURES - 1] = (
+            1.0
+            if trade_limit is None
+            else max(0, trade_limit - s.domestic_trades_this_turn) / max(1, trade_limit)
+        )
+        for p, offer in enumerate(s.trade_counteroffers):
+            if offer is None:
+                continue
+            start = TRADE_BASE_FEATURES + rel[p] * 2 * NUM_RESOURCES
+            trade_context[start : start + NUM_RESOURCES] = np.asarray(offer.give) / 4
+            trade_context[start + NUM_RESOURCES : start + 2 * NUM_RESOURCES] = (
+                np.asarray(offer.receive) / 4
+            )
+
         event_array, event_mask = self._encode_events(events, observer)
         masks = (
             build_masks(game.legal_actions(), observer)
@@ -158,6 +195,7 @@ class ObservationEncoder:
             "hand": hand,
             "dev_cards": dev_cards,
             "globals": g,
+            "trade_context": trade_context,
             "events": event_array,
             "event_mask": event_mask,
             "masks": masks,
@@ -209,4 +247,10 @@ class ObservationEncoder:
                     v[i + NUM_RESOURCES + (p - observer) % NUM_PLAYERS] = n / 10
             elif e.counts and e.kind != EventKind.DICE_ROLLED:
                 v[i : i + NUM_RESOURCES] = np.asarray(e.counts) / 5
+            if e.kind == EventKind.TRADE_RESPONDED:
+                v[-(2 * NUM_RESOURCES + 1)] = e.value
+            if e.give:
+                v[-2 * NUM_RESOURCES : -NUM_RESOURCES] = np.asarray(e.give) / 4
+            if e.receive:
+                v[-NUM_RESOURCES:] = np.asarray(e.receive) / 4
         return out, mask

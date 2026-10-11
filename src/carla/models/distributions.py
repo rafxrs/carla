@@ -26,6 +26,7 @@ _SUBS: dict[str, tuple[int, int | None, tuple[str, ...]]] = {
     "discard": (_T.DISCARD, None, ("resource",)),
     "maritime": (_T.MARITIME_TRADE, None, ("resource", "resource2")),
     "partner": (_T.CONFIRM_TRADE, None, ("player",)),
+    "trade": (_T.PROPOSE_TRADE, None, ("resource", "resource2")),
 }
 
 

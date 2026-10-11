@@ -44,7 +44,7 @@ class HumanAgent(Agent):
         action, self._choice = self._choice, None
         if action is None:
             raise RuntimeError("HumanAgent.act called before the player chose an action")
-        if action not in legal:
+        if action not in legal and not game.is_legal(action):
             raise IllegalActionError(f"{action} is not legal for seat {seat} in {game.phase.name}")
         return action
 

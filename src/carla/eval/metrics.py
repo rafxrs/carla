@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from math import sqrt
 from statistics import NormalDist
 
+from carla.engine.events import EventKind
+from carla.engine.rules import can_afford
 from carla.eval.runner import GameResult
 
 
@@ -58,9 +60,50 @@ def format_summary(summary: dict[str, AgentSummary], confidence: float = 0.95) -
 
 
 def trade_metrics(results: Sequence[GameResult]) -> dict[str, float]:
-    """Domestic-trade metrics: proposal feasibility rate and acceptance rate per agent.
+    """Offer feasibility, acceptance and execution rates from recorded games.
 
-    TODO(eval): implement once the engine supports domestic trade (count TRADE_* events from
-    each result's record).
+    Feasibility uses hidden state for retrospective evaluation only: a proposal is feasible if
+    at least one opponent held all requested cards when it was made. It must never be exposed
+    to the proposer through action masks or observations.
     """
-    raise NotImplementedError("domestic trade is not implemented in the engine yet")
+    proposals = invitations = counteroffers = feasible = counter_feasible = accepted = executed = 0
+    for result in results:
+        if result.record is None:
+            raise ValueError("trade metrics require recorded games")
+        had_acceptance = False
+        original_round = False
+        for game, events in result.record.iter_steps():
+            for event in events:
+                if event.kind == EventKind.TRADE_PROPOSED:
+                    proposals += 1
+                    original_round = True
+                    had_acceptance = False
+                    if any(
+                        q != event.player and can_afford(game.state.hands[q], event.receive)
+                        for q in range(len(game.state.hands))
+                    ):
+                        feasible += 1
+                elif event.kind == EventKind.TRADE_INVITED:
+                    invitations += 1
+                    original_round = False
+                    had_acceptance = False
+                elif event.kind == EventKind.TRADE_COUNTERED:
+                    counteroffers += 1
+                    counter_feasible += int(
+                        can_afford(game.state.hands[event.target], event.receive)
+                    )
+                elif event.kind == EventKind.TRADE_RESPONDED and event.value == 1:
+                    had_acceptance = True
+                elif event.kind in (EventKind.TRADE_EXECUTED, EventKind.TRADE_CANCELLED):
+                    accepted += int(original_round and had_acceptance)
+                    executed += int(event.kind == EventKind.TRADE_EXECUTED)
+                    had_acceptance = False
+    return {
+        "proposals": float(proposals),
+        "invitations": float(invitations),
+        "counteroffers": float(counteroffers),
+        "feasibility_rate": feasible / proposals if proposals else 0.0,
+        "acceptance_rate": accepted / proposals if proposals else 0.0,
+        "counter_feasibility_rate": counter_feasible / counteroffers if counteroffers else 0.0,
+        "execution_rate": executed / (proposals + invitations) if proposals + invitations else 0.0,
+    }

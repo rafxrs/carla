@@ -28,6 +28,7 @@ def test_gae_handles_parallel_envs():
 def test_rollout_and_checkpoint_roundtrip(tmp_path):
     torch = pytest.importorskip("torch")
     from carla.config import ExperimentConfig, ModelConfig
+    from carla.engine.actions import NUM_ACTION_TYPES
     from carla.engine.config import EngineConfig
     from carla.envs import CatanEnv
     from carla.models import build_policy
@@ -38,7 +39,7 @@ def test_rollout_and_checkpoint_roundtrip(tmp_path):
     env = CatanEnv(EngineConfig(max_turns=30))
     policy = build_policy(ModelConfig(hidden_dim=32, mlp_layers=1))
     batch, _ = collect_rollout(env, policy, num_steps=40, episode_seed=3)
-    assert len(batch) == 40 and batch.observations["masks"]["type"].shape == (40, 15)
+    assert len(batch) == 40 and batch.observations["masks"]["type"].shape == (40, NUM_ACTION_TYPES)
     assert batch.dones.sum() >= 1
     type_masks = batch.observations["masks"]["type"]
     assert all(type_masks[t][batch.actions[t][0]] for t in range(len(batch)))

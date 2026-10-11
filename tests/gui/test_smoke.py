@@ -1,26 +1,35 @@
 """Smoke test of the real Arcade window, hidden (skipped without Arcade or a display)."""
 
+import importlib
+import os
 from collections.abc import Iterator, Sequence
 from typing import TYPE_CHECKING
 
 import pytest
 
-if TYPE_CHECKING:
-    from arcade import Window
-
-try:
-    arcade = pytest.importorskip("arcade")
-except Exception as exc:  # pyglet raises when it cannot reach a display
-    pytest.skip(f"no display: {exc}", allow_module_level=True)
-
+from carla.engine import actions as A
 from carla.engine.actions import Action
 from carla.engine.actions import ActionType as T
+from carla.engine.config import EngineConfig
 from carla.engine.constants import DevCard
 from carla.engine.record import GameRecord
 from carla.engine.rng import Rng
 from carla.engine.simulate import play_random_game
 from carla.gui.app import DIGIT_KEYS, KEY_COMMANDS, MOUSE_LEFT, MOUSE_RIGHT, GuiApp, GuiOptions
 from carla.gui.geometry import Point
+from tests.engine.scenario import give, post_setup_game
+
+if TYPE_CHECKING:
+    from arcade import Window
+
+REQUIRE_GUI = os.environ.get("CARLA_REQUIRE_GUI") == "1"
+
+try:
+    arcade = importlib.import_module("arcade") if REQUIRE_GUI else pytest.importorskip("arcade")
+except Exception as exc:  # pyglet raises when it cannot reach a display
+    if REQUIRE_GUI:
+        raise
+    pytest.skip(f"no display: {exc}", allow_module_level=True)
 
 
 @pytest.fixture
@@ -32,6 +41,8 @@ def open_app():
         try:
             window = app.open(visible=False)
         except Exception as exc:  # no OpenGL 3.3 context available
+            if REQUIRE_GUI:
+                pytest.fail(f"Arcade window could not open: {exc}")
             pytest.skip(f"cannot open a window: {exc}")
         apps.append(app)
         return app, window
@@ -71,6 +82,46 @@ def test_play_window_draws_and_routes_input(open_app):
     assert not app.help and not window.closed  # Esc closes dialogs, never the window
     send(window, "on_resize", 1000, 660)
     assert app.layout.width == 1000 and drawn_something(app)
+
+
+def test_domestic_trade_picker_draws_in_arcade_window(open_app):
+    config = EngineConfig(allow_domestic_trade=True)
+    app, _window = open_app(GuiOptions(mode="play", engine=config, delay=0.0))
+    game = post_setup_game(config=config)
+    give(game, 0, (2, 0, 0, 0, 0))
+    app.controller.reset(game.state, game.legal_actions())
+    assert app.controller.press("trade") is None
+    app.controller.choose(("give", 0, 1))
+    app.controller.choose(("give", 0, 1))
+    app.controller.choose(("get", 1, 1))
+    assert app.controller.picker is not None and app.controller.picker.kind == "offer"
+    assert drawn_something(app)
+
+
+def test_counteroffer_and_confirmation_draw_in_arcade_window(open_app):
+    config = EngineConfig(allow_domestic_trade=True)
+    app, _window = open_app(GuiOptions(mode="play", engine=config, delay=0.0))
+    game = post_setup_game(config=config)
+    give(game, 0, (2, 0, 1, 0, 0))
+    give(game, 1, (0, 1, 0, 0, 1))
+    game.step(A.ONE_FOR_ONE[0][4])
+    app.on_resize(1000, 660)
+    app.controller.seat = 1
+    app.controller.reset(game.state, game.legal_actions())
+    assert app.controller.picker is not None and app.controller.picker.kind == "response"
+    assert drawn_something(app)
+    app.controller.choose("counter")
+    assert app.controller.picker is not None
+    assert app.controller.picker.cancel_label == "Back (Esc)"
+    assert drawn_something(app)
+    game.step(A.ONE_FOR_ONE[4][2])
+    game.step(A.REJECT_TRADE)
+    game.step(A.REJECT_TRADE)
+    app.controller.seat = 0
+    app.controller.reset(game.state, game.legal_actions())
+    assert app.controller.picker is not None and app.controller.picker.kind == "confirm"
+    assert app.controller.picker.options[0].detail == "Give 1 wool\nGet 1 ore"
+    assert drawn_something(app)
 
 
 def test_watch_and_replay_windows(open_app, tmp_path):

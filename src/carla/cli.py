@@ -19,6 +19,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--games", type=int, default=10)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--max-turns", type=int, default=None)
+    p.add_argument("--config", type=Path, help="experiment config providing engine rules")
     p.add_argument("--save", type=Path, help="directory for .json.gz records and .txt logs")
 
     p = commands.add_parser("replay", help="show a recorded game or the position at a step")
@@ -94,12 +95,16 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _simulate(args) -> int:
+    from dataclasses import replace
+
     from carla.agents import make_agent
     from carla.engine import EngineConfig
     from carla.engine.rng import derive_seed
     from carla.eval import play_game
 
-    config = EngineConfig(max_turns=args.max_turns)
+    config = load_config(args.config).engine if args.config else EngineConfig()
+    if args.max_turns is not None:
+        config = replace(config, max_turns=args.max_turns)
     start, steps = time.perf_counter(), 0
     for i in range(args.games):
         seed = derive_seed(args.seed, "game", i)
@@ -133,6 +138,7 @@ def _replay(args) -> int:
 
 def _tournament(args) -> int:
     from carla.eval import format_summary, run_tournament
+    from carla.eval.metrics import trade_metrics
 
     cfg = load_config(args.config)
     ev = cfg.eval
@@ -150,6 +156,17 @@ def _tournament(args) -> int:
         rates = ", ".join(f"{s.name} {s.win_rate:.3f}" for s in summary.values())
         print(f"seed {seed}: {rates}")
     print(format_summary(result.summary, ev.confidence))
+    if args.records and cfg.engine.allow_domestic_trade:
+        trade = trade_metrics(result.results)
+        print(
+            f"trades: {int(trade['proposals'])} proposals, "
+            f"{int(trade['invitations'])} invitations, "
+            f"{int(trade['counteroffers'])} counteroffers; "
+            f"{trade['feasibility_rate']:.3f} proposal feasibility, "
+            f"{trade['acceptance_rate']:.3f} acceptance, "
+            f"{trade['counter_feasibility_rate']:.3f} counter feasibility, "
+            f"{trade['execution_rate']:.3f} execution"
+        )
     return 0
 
 
@@ -219,7 +236,7 @@ def _gui(args) -> int:
             file=sys.stderr,
         )
         return 1
-    except NotImplementedError as exc:  # e.g. engine.allow_domestic_trade=true
+    except NotImplementedError as exc:
         print(f"carla gui: {exc}", file=sys.stderr)
         return 1
     return 0

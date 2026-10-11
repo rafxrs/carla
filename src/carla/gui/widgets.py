@@ -172,6 +172,8 @@ def layout_picker(picker: Picker, area: Rect) -> PickerLayout:
     """Centre the dialog in `area`: a grid of option cells and an optional Cancel button."""
     if picker.kind == "offer":
         return _layout_offer(picker, area)
+    if picker.kind == "confirm":
+        return _layout_trade_confirm(picker, area)
     resources = any(o.resource >= 0 for o in picker.options)
     columns = min(len(picker.options), 5 if resources else 3) or 1
     cell_w, cell_h = (104, 74) if resources else (176, 52)
@@ -209,11 +211,34 @@ def _layout_offer(picker: Picker, area: Rect) -> PickerLayout:
                 option = by_key.get((side, r, delta))
                 if option is not None:
                     cells.append((option, Rect(x + dx, row_y, 28, 28)))
+    action_w = 150
     propose = by_key.get("propose")
     if propose is not None:
-        cells.append((propose, Rect(panel.right - _PAD - 150, panel.y + _PAD, 150, 34)))
-    cancel = Rect(panel.x + _PAD, panel.y + _PAD, 120, 34)
+        cells.append((propose, Rect(panel.right - _PAD - action_w, panel.y + _PAD, action_w, 34)))
+    invite = by_key.get("invite")
+    if invite is not None:
+        cells.append((invite, Rect(panel.cx - action_w / 2, panel.y + _PAD, action_w, 34)))
+    cancel = Rect(panel.x + _PAD, panel.y + _PAD, action_w, 34)
     return PickerLayout(panel, tuple(cells), cancel)
+
+
+def _layout_trade_confirm(picker: Picker, area: Rect) -> PickerLayout:
+    """Give each partner's full terms a readable row; keep Cancel in the footer."""
+    partners = [option for option in picker.options if option.key != "cancel"]
+    cancel = next((option for option in picker.options if option.key == "cancel"), None)
+    width = min(560, area.w - 20)
+    row_h = 72
+    height = 2 * _PAD + _TITLE_H + (_DETAIL_H if picker.detail else 0)
+    height += len(partners) * (row_h + _GAP) + (44 if cancel else 0)
+    panel = Rect(area.cx - width / 2, area.cy - height / 2, width, height)
+    top = panel.top - _PAD - _TITLE_H - (_DETAIL_H if picker.detail else 0)
+    cells = [
+        (option, Rect(panel.x + _PAD, top - (i + 1) * row_h - i * _GAP, width - 2 * _PAD, row_h))
+        for i, option in enumerate(partners)
+    ]
+    if cancel is not None:
+        cells.append((cancel, Rect(panel.cx - 75, panel.y + _PAD, 150, 34)))
+    return PickerLayout(panel, tuple(cells), None)
 
 
 def draw_picker(
@@ -257,8 +282,7 @@ def draw_picker(
         _draw_option(layer, option, rect, option.key == hovered, i + 1 if numbered else 0)
     if layout.cancel is not None:
         c = layout.cancel
-        label = "Cancel (Esc)" if picker.kind != "offer" else "Cancel"
-        draw_button(layer, Button("cancel", label, c), hovered == "cancel")
+        draw_button(layer, Button("cancel", picker.cancel_label, c), hovered == "cancel")
 
 
 def _draw_option(layer: Layer, option: Option, r: Rect, hovered: bool, number: int) -> None:
@@ -276,14 +300,40 @@ def _draw_option(layer: Layer, option: Option, r: Rect, hovered: bool, number: i
                 layer, "plus" if option.label == "+" else "minus", r.cx, r.cy, r.h * 0.45, ink
             )
             return
-        draw_button(layer, Button(str(option.key), option.label, r, enabled), hovered)
+        lines = option.detail.splitlines()
+        label = "" if len(lines) == 2 else option.label
+        draw_button(layer, Button(str(option.key), label, r, enabled), hovered)
         if option.player >= 0:
             layer.circle(r.x + 16, r.cy, 7, theme.PLAYER[option.player])
         if option.detail:
             ink = theme.TEXT_MUTED if enabled else theme.BUTTON_TEXT_DISABLED
-            layer.text(
-                option.detail, r.cx, r.y + 7, theme.FONT_SMALL, ink, False, "center", "bottom"
-            )
+            if len(lines) == 2:
+                title_ink = theme.TEXT if enabled else theme.BUTTON_TEXT_DISABLED
+                layer.text(
+                    option.label,
+                    r.cx,
+                    r.top - 18,
+                    theme.FONT,
+                    title_ink,
+                    enabled,
+                    "center",
+                    "center",
+                )
+                for i, line in enumerate(lines):
+                    layer.text(
+                        line,
+                        r.cx,
+                        r.top - 37 - i * 16,
+                        theme.FONT_SMALL,
+                        ink,
+                        False,
+                        "center",
+                        "center",
+                    )
+            else:
+                layer.text(
+                    option.detail, r.cx, r.y + 7, theme.FONT_SMALL, ink, False, "center", "bottom"
+                )
     if number:
         layer.text(
             str(number),

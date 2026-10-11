@@ -22,19 +22,20 @@ class ActionType(IntEnum):
     MOVE_ROBBER = 7
     DISCARD = 8
     MARITIME_TRADE = 9
-    # Domestic trade (interface only, see rules.py): propose -> others respond -> confirm/cancel.
+    # Domestic trade: propose or invite -> responses/counteroffers -> confirm/cancel.
     PROPOSE_TRADE = 10
     ACCEPT_TRADE = 11
     REJECT_TRADE = 12
     CONFIRM_TRADE = 13
     CANCEL_TRADE = 14
+    INVITE_TRADE = 15
 
 
 NUM_ACTION_TYPES = len(ActionType)
 
 
 class TradeOffer(NamedTuple):
-    """Domestic trade proposal: per-resource counts the proposer gives and wants."""
+    """Per-resource counts the acting offer maker gives and wants."""
 
     give: tuple[int, ...]
     receive: tuple[int, ...]
@@ -54,6 +55,7 @@ class Action(NamedTuple):
     DISCARD           resource (one card per decision)
     MARITIME_TRADE    resource = given type, resource2 = received type (ratio from ports)
     PROPOSE_TRADE     trade
+    INVITE_TRADE      no fields; ask the other players for offers
     CONFIRM_TRADE     player = accepting partner
     ================  =====================================================================
 
@@ -128,6 +130,25 @@ MONOPOLY_ON = tuple(
 ACCEPT_TRADE = Action(ActionType.ACCEPT_TRADE)
 REJECT_TRADE = Action(ActionType.REJECT_TRADE)
 CANCEL_TRADE = Action(ActionType.CANCEL_TRADE)
+INVITE_TRADE = Action(ActionType.INVITE_TRADE)
+ONE_FOR_ONE = tuple(
+    tuple(
+        (
+            Action(
+                ActionType.PROPOSE_TRADE,
+                trade=TradeOffer(
+                    tuple(int(i == give) for i in range(NUM_RESOURCES)),
+                    tuple(int(i == receive) for i in range(NUM_RESOURCES)),
+                ),
+            )
+            if give != receive
+            else None
+        )
+        for receive in range(NUM_RESOURCES)
+    )
+    for give in range(NUM_RESOURCES)
+)
+"""One-for-one offers exposed to the baseline policy; the engine accepts any valid offer."""
 CONFIRM_TRADE_WITH = tuple(Action(ActionType.CONFIRM_TRADE, player=p) for p in range(NUM_PLAYERS))
 
 ALL_ACTIONS: tuple[Action, ...] = (
@@ -144,10 +165,12 @@ ALL_ACTIONS: tuple[Action, ...] = (
     PLAY_ROAD_BUILDING,
     *(YEAR_OF_PLENTY[a][b] for a in range(NUM_RESOURCES) for b in range(a, NUM_RESOURCES)),
     *MONOPOLY_ON,
+    *(a for row in ONE_FOR_ONE for a in row if a is not None),
     ACCEPT_TRADE,
     REJECT_TRADE,
     CANCEL_TRADE,
+    INVITE_TRADE,
     *CONFIRM_TRADE_WITH,
 )
-"""Every action except PROPOSE_TRADE (whose offers are combinatorial)."""
+"""Every fixed action, including the one-for-one subset of combinatorial trade offers."""
 ACTION_INDEX: dict[Action, int] = {a: i for i, a in enumerate(ALL_ACTIONS)}

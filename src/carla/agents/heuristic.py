@@ -6,7 +6,7 @@ TODO(eval): tune weights, add a lookahead "value-function" variant, smarter robb
 from collections.abc import Sequence
 
 from carla.agents.base import Agent
-from carla.engine.actions import Action, ActionType
+from carla.engine.actions import Action, ActionType, TradeOffer
 from carla.engine.board import Board
 from carla.engine.constants import (
     CITY_COST,
@@ -75,6 +75,10 @@ class HeuristicAgent(Agent):
         if s.phase == Phase.PRE_ROLL:
             knight = self._knight_if_blocked(s, seat, by_type)
             return knight or by_type[_T.ROLL_DICE][0]
+        if s.phase == Phase.TRADE_RESPONSE:
+            return self._trade_response(s, seat, by_type)
+        if s.phase == Phase.TRADE_CONFIRM:
+            return self._trade_confirm(s, seat, by_type)
         return self._main(s, seat, by_type)
 
     # ------------------------------------------------------------------ main phase
@@ -102,8 +106,60 @@ class HeuristicAgent(Agent):
                 return road
         if _T.BUY_DEV_CARD in by_type and target in (DEV_CARD_COST, ROAD_COST):
             return by_type[_T.BUY_DEV_CARD][0]
+        offer = self._domestic_offer(s, seat, by_type, target)
+        if offer is not None:
+            return offer
         trade = self._trade_toward(s, seat, by_type.get(_T.MARITIME_TRADE, []), target)
         return trade or by_type[_T.END_TURN][0]
+
+    def _domestic_offer(self, s: GameState, seat: int, by_type, target) -> Action | None:
+        if _T.PROPOSE_TRADE not in by_type or (
+            s.phase == Phase.MAIN and s.trade_proposals_this_turn
+        ):
+            return None
+        hand = s.hands[seat]
+        needs = [r for r in range(NUM_RESOURCES) if hand[r] < target[r]]
+        spare = [r for r in range(NUM_RESOURCES) if hand[r] > target[r]]
+        if not needs or not spare:
+            return None
+        give, receive = [0] * NUM_RESOURCES, [0] * NUM_RESOURCES
+        give[spare[0]] = receive[needs[0]] = 1
+        return Action(_T.PROPOSE_TRADE, trade=TradeOffer(tuple(give), tuple(receive)))
+
+    def _trade_response(self, s: GameState, seat: int, by_type) -> Action:
+        target = self._target_cost(s, seat)
+        hand = s.hands[seat]
+        if _T.ACCEPT_TRADE in by_type:
+            offer = s.pending_trade
+            assert offer is not None
+            before = sum(max(0, target[r] - hand[r]) for r in range(NUM_RESOURCES))
+            after = sum(
+                max(0, target[r] - hand[r] - offer.give[r] + offer.receive[r])
+                for r in range(NUM_RESOURCES)
+            )
+            if after < before:
+                return by_type[_T.ACCEPT_TRADE][0]
+        counter = self._domestic_offer(s, seat, by_type, target)
+        return counter or by_type[_T.REJECT_TRADE][0]
+
+    def _trade_confirm(self, s: GameState, seat: int, by_type) -> Action:
+        hand, target = s.hands[seat], self._target_cost(s, seat)
+        before = sum(max(0, target[r] - hand[r]) for r in range(NUM_RESOURCES))
+        best = by_type[_T.CANCEL_TRADE][0]
+        best_gain = 0
+        for action in by_type.get(_T.CONFIRM_TRADE, ()):
+            counter = s.trade_counteroffers[action.player]
+            if counter is None:
+                assert s.pending_trade is not None
+                give, receive = s.pending_trade
+            else:
+                give, receive = counter.receive, counter.give
+            after = sum(
+                max(0, target[r] - hand[r] + give[r] - receive[r]) for r in range(NUM_RESOURCES)
+            )
+            if before - after > best_gain:
+                best, best_gain = action, before - after
+        return best
 
     def _target_cost(self, s: GameState, seat: int) -> tuple[int, ...]:
         if s.cities_left[seat] and city_corners(s, seat):

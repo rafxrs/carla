@@ -50,10 +50,6 @@ class Game:
         self, config: EngineConfig | None = None, seed: int = 0, board: Board | None = None
     ) -> None:
         config = config or EngineConfig()
-        if config.allow_domestic_trade:
-            raise NotImplementedError(
-                "allow_domestic_trade=True: domestic trade is not implemented yet (engine TODO)"
-            )
         if board is None:
             board_seed = (
                 config.board_seed if config.board_seed is not None else derive_seed(seed, "board")
@@ -122,6 +118,13 @@ class Game:
     def is_legal(self, action: Action) -> bool:
         if self._legal_set is None:
             self._legal_set = frozenset(self.legal_actions())
+        if action.type == ActionType.PROPOSE_TRADE:
+            return (
+                type(action.type) is ActionType
+                and action == Action(ActionType.PROPOSE_TRADE, trade=action.trade)
+                and (rules.can_propose_trade(self.state) or rules.can_counter_trade(self.state))
+                and rules.valid_trade_offer(self.state, action.trade)
+            )
         return action in self._legal_set
 
     # ------------------------------------------------------------------ transitions

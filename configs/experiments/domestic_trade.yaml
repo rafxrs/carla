@@ -1,0 +1,8 @@
+# Runnable MLP baseline with player-to-player trading enabled.
+extends: mlp.yaml
+name: domestic_trade
+engine:
+  allow_domestic_trade: true
+  max_trade_proposals_per_turn: 3
+  max_domestic_trades_per_turn: 3
+  max_trade_cards_per_side: 4

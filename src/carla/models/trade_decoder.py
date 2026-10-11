@@ -1,4 +1,4 @@
-"""Autoregressive domestic-trade decoder (TODO: models workstream; engine support pending).
+"""Autoregressive domestic-trade decoder (TODO: models workstream).
 
 Emits a token sequence: give-resources (masked so that the running total never exceeds the
 proposer's hand), then receive-resources (masked to types not given), then STOP. Tokens:

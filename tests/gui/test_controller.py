@@ -1,5 +1,6 @@
 from carla.engine import actions as A
 from carla.engine.actions import Action, ActionType, TradeOffer
+from carla.engine.config import EngineConfig
 from carla.engine.constants import GENERIC_PORT, DevCard
 from carla.engine.game import Game
 from carla.engine.rng import Rng
@@ -39,7 +40,14 @@ def test_click_scripts_reach_every_legal_action_in_random_games():
             kinds = sorted({a.type for a in legal})  # random by type, like RandomAgent
             kind = kinds[rng.randbelow(len(kinds))]
             game.step(rng.choice([a for a in legal if a.type == kind]))
-    domestic = {"PROPOSE_TRADE", "ACCEPT_TRADE", "REJECT_TRADE", "CONFIRM_TRADE", "CANCEL_TRADE"}
+    domestic = {
+        "PROPOSE_TRADE",
+        "ACCEPT_TRADE",
+        "REJECT_TRADE",
+        "CONFIRM_TRADE",
+        "CANCEL_TRADE",
+        "INVITE_TRADE",
+    }
     assert {t.name for t in seen} == {t.name for t in ActionType} - domestic
 
 
@@ -257,7 +265,7 @@ def test_trade_confirmation_picker():
 
 
 def test_trade_offer_composer():
-    game = post_setup_game()
+    game = post_setup_game(config=EngineConfig(allow_domestic_trade=True))
     give(game, 0, (1, 1, 0, 0, 0))
     hidden = controller_for(game)
     assert "trade" not in {b.id for b in hidden.buttons()}  # domestic trade disabled
@@ -277,8 +285,61 @@ def test_trade_offer_composer():
     assert controller.picker is None
 
 
+def test_trade_controller_actions_complete_a_game_exchange():
+    game = post_setup_game(config=EngineConfig(allow_domestic_trade=True))
+    give(game, 0, (1, 0, 0, 0, 0))
+    give(game, 1, (0, 1, 0, 0, 0))
+    proposer = controller_for(game, domestic_trade=True)
+    proposer.press("trade")
+    proposer.choose(("give", 0, 1))
+    proposer.choose(("get", 1, 1))
+    proposal = proposer.choose("propose")
+    assert proposal is not None
+    game.step(proposal)
+
+    for answer in ("accept", "reject", "reject"):
+        responder = controller_for(game, domestic_trade=True)
+        game.step(responder.choose(answer))
+
+    confirmation = controller_for(game, domestic_trade=True)
+    game.step(confirmation.choose(1))
+    assert game.state.hands[0] == [0, 1, 0, 0, 0]
+    assert game.state.hands[1] == [1, 0, 0, 0, 0]
+
+
+def test_gui_can_invite_and_complete_a_counteroffer():
+    game = post_setup_game(config=EngineConfig(allow_domestic_trade=True))
+    give(game, 0, (2, 0, 0, 0, 0))
+    give(game, 1, (0, 1, 0, 0, 0))
+    active = controller_for(game, domestic_trade=True)
+    active.press("trade")
+    assert active.choose("invite") is A.INVITE_TRADE
+    game.step(A.INVITE_TRADE)
+
+    responder = controller_for(game, domestic_trade=True)
+    assert responder.picker is not None and "invites" in responder.picker.title
+    assert responder.choose("counter") is None
+    assert responder.picker is not None and responder.picker.kind == "offer"
+    assert responder.cancel() and responder.picker.kind == "response"
+    responder.choose("counter")
+    responder.choose(("give", 1, 1))
+    responder.choose(("get", 0, 1))
+    counter = responder.choose("propose")
+    assert counter == A.ONE_FOR_ONE[1][0]
+    game.step(counter)
+    game.step(A.REJECT_TRADE)
+    game.step(A.REJECT_TRADE)
+
+    active = controller_for(game, domestic_trade=True)
+    assert active.picker is not None
+    assert active.picker.options[0].detail == "Give 1 lumber\nGet 1 brick"
+    game.step(active.choose(1))
+    assert game.state.hands[0] == [1, 1, 0, 0, 0]
+    assert game.state.hands[1] == [1, 0, 0, 0, 0]
+
+
 def test_trade_button_needs_the_main_phase():
-    game = post_setup_game(rolled=False)
+    game = post_setup_game(rolled=False, config=EngineConfig(allow_domestic_trade=True))
     give(game, 0, (1, 0, 0, 0, 0))
     controller = Controller(0, domestic_trade=True)
     controller.reset(game.state, game.legal_actions())

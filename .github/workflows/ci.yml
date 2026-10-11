@@ -6,15 +6,22 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - name: Install (CPU torch)
-        run: uv sync --extra cpu --extra dev
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: Install (CPU torch and Arcade)
+        run: uv sync --locked --extra cpu --extra dev --extra gui
       - name: Lint
         run: |
-          uv run ruff check src tests scripts
-          uv run black --check src tests scripts
+          uv run --no-sync ruff check src tests scripts
+          uv run --no-sync black --check src tests scripts
       - name: Test
-        run: uv run pytest -n auto
+        run: uv run --no-sync pytest -n auto
+      - name: Install virtual display
+        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri
+      - name: Test Arcade window
+        env:
+          CARLA_REQUIRE_GUI: "1"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: xvfb-run -a -s '-screen 0 1280x800x24' uv run --no-sync pytest tests/gui/test_smoke.py -q
