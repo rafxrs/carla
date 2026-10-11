@@ -7,8 +7,9 @@ player confirms one exchange or cancels. Cards move only on confirmation.
 
 The engine and Arcade GUI accept multi-card, multi-resource offers. The current
 factored policy and baseline bots generate one-for-one offers. That smaller policy
-action space is not the engine's rule limit. Trading is off by default; the runnable
-MLP example `configs/experiments/domestic_trade.yaml` enables it. `full_trade.yaml`
+action space is not the engine's rule limit. The engine leaves trading off by default;
+the runnable MLP example `configs/experiments/domestic_trade.yaml` enables it, and
+`carla gui` turns it on unless given `--no-trading`. `full_trade.yaml`
 describes planned model work, not a completed training configuration.
 
 ## Offer meaning
@@ -29,10 +30,10 @@ perspective.
 
 | `EngineConfig` field | Default | Effect |
 | --- | ---: | --- |
-| `allow_domestic_trade` | `False` | Enables the protocol in the main phase. |
+| `allow_domestic_trade` | `False` | Enables the protocol in the main phase (on in the GUI unless `--no-trading`). |
 | `max_trade_proposals_per_turn` | 3 | Negotiation rounds started by the active player, including invitations and cancelled rounds. `None` removes the cap; `0` disables rounds. |
 | `max_domestic_trades_per_turn` | 3 | Completed exchanges on the active player's turn. `None` removes the cap; `0` prevents new rounds. |
-| `max_trade_cards_per_side` | 4 | Cards given or requested in one proposal or counteroffer. `0` removes the cap. |
+| `max_trade_cards_per_side` | 4 | Cards given or requested in one proposal or counteroffer, at least 1. `None` removes the cap. |
 
 These are configurable experiment controls. The [CATAN rulebook](https://www.catan.com/sites/default/files/2025-03/CN3081%20CATAN%E2%80%93The%20Game%20Rulebook%20secure%20%281%29.pdf)
 does not impose these numerical limits. Counters do not consume another round slot; all three other players get one response
@@ -60,12 +61,14 @@ bank is unaffected by domestic exchanges.
 - `give` and `receive` are five-element tuples of nonnegative integers, each with at
   least one card. Boolean counts and mutable-list vectors are rejected.
 - One resource cannot appear on both sides of the same offer. Each side respects
-  `max_trade_cards_per_side` when its value is nonzero.
+  `max_trade_cards_per_side` unless it is `None`.
 - The offer maker must hold everything they promise. The engine does not reject a
   proposal merely because an opponent lacks requested cards; doing so would expose
   a hidden hand. Acceptance checks only the responder's own hand.
-- Confirmation rechecks both hands. `Game.is_legal()` validates custom multi-card
-  proposals, including canonical unused action fields and the action type.
+- Hands cannot change during a negotiation, so these checks still hold when the
+  active player concludes; taking a counteroffer also requires that player to hold
+  the cards it asks for. `Game.is_legal()` checks any submitted offer with
+  `rules.legal_trade_offer()`, including the action type and unused fields.
 - Offers, answers, and executed terms are public. Other players' resource
   compositions and development-card identities remain hidden from observations
   and masks. Retrospective evaluation can inspect hidden hands in recorded games.
@@ -78,18 +81,26 @@ bank is unaffected by domestic exchanges.
 | Rules and transitions | `engine/rules.py`, `engine/game.py` | Lists baseline legal actions, validates arbitrary submitted offers, enforces hand and phase checks, transfers cards, and clears round state. |
 | Events and replay | `engine/events.py`, `engine/text.py`, game records | Publishes invitations, proposals, responses, counters, executions, and cancellations, with readable logs and exact replay. |
 | Environment and model | `envs/action_space.py`, `envs/observation.py`, `models/` | Adds trade action types and masks, public relative-seat context, and one-for-one policy heads. |
-| Human and bot play | `gui/controller.py`, `gui/widgets.py`, `gui/session.py`, `agents/` | Composes full offers in Arcade, shows each partner's terms, and supplies baseline decisions. |
+| Human and bot play | `gui/controller.py`, `gui/trade.py`, `gui/session.py`, `agents/` | Builds offers from hand cards in Arcade, shows every offer and answer as cards, and supplies baseline decisions. |
 | Evaluation | `eval/metrics.py`, `cli.py` | Reports invitations, counters, feasibility, acceptance, and execution from recorded games and tournaments. |
 
 `GameState` stores the pending offer (`None` for an invitation), acceptances,
 counteroffers, response progress, and per-turn counts. Snapshots and serialized state
 preserve these fields. Public trade events appear in records, so saved games can be
 replayed to the same state. `current_player` remains the turn owner while
-`decision_player` moves through the opponents during responses.
+`decision_player` moves through the opponents during responses. In `rules.py`, each
+trade action has its own handler, like every other action; `_open_negotiation`,
+`_next_answer` and `_close_negotiation` move a round between the phases.
+
+Without domestic trade, `GameState.to_dict()` leaves out the negotiation fields and
+`EngineConfig.to_dict()` the limits added with domestic trade. Such games serialize,
+and hash, exactly as before domestic trade existed, so records saved earlier still
+replay.
 
 `legal_actions()` enumerates the fixed one-for-one subset that the current policy
-can represent. `Game.is_legal()` additionally validates submitted multi-card offers
-through `valid_trade_offer()`. An engine or GUI offer can therefore be legal without
+can represent. `Game.is_legal()` additionally accepts any offer that
+`legal_trade_offer()` allows: a valid offer (`valid_trade_offer()`) that opens a
+negotiation or answers one. An engine or GUI offer can therefore be legal without
 appearing in the enumerable policy list. `build_masks()` and `encode_action()`
 explicitly reject multi-card offers instead of dropping extra cards.
 
@@ -118,19 +129,28 @@ measures describe opportunities and behavior, not trade quality or win-rate gain
 
 ## Arcade flow and how to run it
 
-The hand bar shows **Offer trade** (`P`) when trading is enabled and a round can
-start. Its dialog uses the existing panel, resource colours, button shapes, and
-text style. Per-resource `+` and `-` controls compose multi-card proposals, while
-**Invite offers** starts a round without terms. Responders see the proposal and may
-accept, reject, or compose a counteroffer. `Esc` in a counteroffer composer returns
-to the mandatory response. The active player sees selectable partners with their
-exact give/get terms and can confirm one or cancel. Bank and port trades retain
-their separate **Bank trade** control.
+Trades start from the hand. Clicking a resource card opens the
+trade panel above the hand and moves that card into **You give**; each further click
+adds another. Clicking one of the five resources on the right adds it to **You get**,
+and clicking a card in the panel takes it back. One offer then goes to the
+**bank** (each resource given in a multiple of its rate, one card per batch, played
+as consecutive maritime trades) or to the **players**. **Ask for offers** starts a
+round without terms. `T` opens an empty offer and `Esc` closes it.
+
+Offers and answers show their cards. A responder sees the proposal under **You give**
+and **You get** and can decline, accept, or counter; clicking a hand card also starts
+a counteroffer. While the others answer, the proposer sees each seat's status, then
+picks a deal with its **Trade** button or cancels. Spectators see the same table
+read-only.
 
 ```bash
-uv sync --locked --extra cpu --extra dev --extra gui
-uv run --no-sync carla gui --play --seat 0 --config configs/experiments/domestic_trade.yaml
+carla gui --play                       # player trading on, default limits
+carla gui --play --no-trading          # bank and port trades only
+carla gui --play --set engine.max_trade_cards_per_side=2
 ```
+
+With `--config`, the GUI takes the limits from the file; whether players trade at
+all is set by `--no-trading`, not by the file.
 
 The README has simulation and tournament commands for non-GUI runs.
 
@@ -138,7 +158,7 @@ The README has simulation and tournament commands for non-GUI runs.
 
 1. **Variable-length neural offers.** Add a decoder that chooses legal `give` and
    `receive` count vectors using the acting hand and public state. Keep
-   `valid_trade_offer()` as the final engine check. Update model sampling, action
+   `legal_trade_offer()` as the final engine check. Update model sampling, action
    encoding, and tests together; the current `(give resource, receive resource)`
    mask cannot represent extra cards without losing information.
 2. **Better trading agents.** Use the existing response and confirmation phases,
@@ -152,8 +172,8 @@ The README has simulation and tournament commands for non-GUI runs.
    separate project work.
 4. **New rules or limits.** Change typed `EngineConfig`, the initiation checks,
    and the offer validator together, then expose the setting in an experiment
-   YAML. Preserve the one-response-per-seat bound and confirmation hand recheck
-   if the protocol changes. Label experiment controls as such.
+   YAML. Preserve the one-response-per-seat bound and the hand checks if the
+   protocol changes. Label experiment controls as such.
 5. **New measurements or UI choices.** Derive outcome metrics from recorded
    games and public events; keep private-hand analysis retrospective. Use the
    existing picker and theme helpers for UI additions.

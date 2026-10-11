@@ -7,9 +7,11 @@ import sys
 import pytest
 
 from carla.engine.actions import ActionType
+from carla.engine.config import EngineConfig
 from carla.engine.constants import DevCard
 from carla.engine.record import GameRecord
 from carla.engine.rng import Rng
+from carla.engine.rules import trade_ratios
 from carla.engine.simulate import play_random_game
 from carla.engine.state import Phase
 from carla.gui.app import HELP_LINES, KEY_COMMANDS, MOUSE_RIGHT, GuiApp, GuiOptions
@@ -119,36 +121,29 @@ def test_keyboard_plays_a_turn():
 
 def test_pickers_by_mouse_digits_escape_and_right_click():
     app = play_app()
-    play_setup(app)
-    press(app, "roll")
-    run_bots(app)
-    while app.session.game.phase != Phase.MAIN:
-        click_first_target(app)
-        run_bots(app)
-    give(app.session.game, 0, (4, 4, 4, 4, 4))
-    app.session.version += 1  # the position changed behind the session's back
-    app.on_update(0.0)
-    press(app, "bank_trade")
-    assert app.controller.picker is not None and app.controller.picker.kind == "give"
+    main_phase(app)
+    give_dev(app.session.game, 0, DevCard.MONOPOLY)
+    refresh(app)
+    press(app, "play_dev")
+    assert app.controller.picker is not None and app.controller.picker.kind == "dev"
     press(app, "escape")
     assert app.controller.picker is None
-    press(app, "bank_trade")
+    press(app, "play_dev")
     click(app, (2, 2))  # outside the dialog: cancels it
     assert app.controller.picker is None
-    press(app, "bank_trade")
+    press(app, "play_dev")
     click(app, (100, 100), MOUSE_RIGHT)
     assert app.controller.picker is None
-    press(app, "bank_trade")
+    press(app, "play_dev")
     layout = app.picker_layout()
     assert layout is not None and [layer.name for layer in app.frame()][-1] == "picker"
-    lumber = next(r for o, r in layout.options if o.key == 0)
-    click(app, (lumber.cx, lumber.cy))
-    assert app.controller.picker is not None and app.controller.picker.kind == "get"
-    hand = list(app.session.game.state.hands[0])
-    press_digit(app, 4)  # the fourth option of the "get" picker: ore
+    monopoly = next(r for o, r in layout.options if o.key == DevCard.MONOPOLY)
+    click(app, (monopoly.cx, monopoly.cy))
+    assert app.controller.picker is not None and app.controller.picker.kind == "monopoly"
+    press_digit(app, 5)  # the fifth option: ore
     last = app.session.game.history[-1].action
-    assert (last.type, last.resource, last.resource2) == (ActionType.MARITIME_TRADE, 0, 4)
-    assert app.session.game.state.hands[0][4] == hand[4] + 1 and app.controller.picker is None
+    assert (last.type, last.dev, last.resource) == (ActionType.PLAY_DEV_CARD, DevCard.MONOPOLY, 4)
+    assert app.controller.picker is None
 
 
 def test_watch_mode_plays_pauses_steps_and_seeks():
@@ -286,6 +281,11 @@ def test_resize_and_log_scrolling():
     assert not app.on_key_press(ord("z"), 0)  # unknown keys are left to the window
 
 
+def test_players_trade_unless_turned_off():
+    assert play_app().session.game.config.allow_domestic_trade
+    assert not play_app(engine=EngineConfig()).session.game.config.allow_domestic_trade
+
+
 def test_invalid_options():
     with pytest.raises(ValueError, match="mode"):
         GuiApp(GuiOptions(mode="spectate"))
@@ -382,20 +382,17 @@ def centre(button) -> tuple[float, float]:
     return button.rect.cx, button.rect.cy
 
 
-def test_hand_bar_trade_and_buy_dev_buttons():
+def test_hand_bar_buy_dev_button():
     app = play_app()
     main_phase(app)
-    give(app.session.game, 0, (4, 0, 2, 2, 2))
+    give(app.session.game, 0, (0, 0, 2, 2, 2))
     refresh(app)
     bar = app.hand_bar()
-    assert [b.id for b in bar.buttons] == ["bank_trade", "buy_dev", "roll", "end_turn"]
-    assert [b.label for b in bar.buttons] == ["Trade", "Buy dev", "Roll", "End turn"]
+    assert [b.id for b in bar.buttons] == ["buy_dev", "roll", "end_turn"]
+    assert [b.label for b in bar.buttons] == ["Buy dev", "Roll", "End turn"]
     tiles = {b.id: b for b in bar.buttons}
-    assert tiles["bank_trade"].enabled and tiles["buy_dev"].enabled and not tiles["roll"].enabled
+    assert tiles["buy_dev"].enabled and not tiles["roll"].enabled
     assert [c.count for c in bar.cards[:5]] == list(app.session.game.state.hands[0])
-    click(app, centre(tiles["bank_trade"]))  # the bank and port trade picker
-    assert app.controller.picker is not None and app.controller.picker.kind == "give"
-    press(app, "escape")
     held = sum(app.session.game.state.dev_hands[0])
     click(app, centre(tiles["buy_dev"]))
     assert app.session.game.history[-1].action.type == ActionType.BUY_DEV_CARD
@@ -405,6 +402,67 @@ def test_hand_bar_trade_and_buy_dev_buttons():
     before = app.session.position
     click(app, (new.rect.cx, new.rect.cy))
     assert app.session.position == before  # cannot be played yet
+
+
+def trade_click(app: GuiApp, key) -> None:
+    """Click the card or button of the trade panel that sends `key`."""
+    layout = app.trade_layout()
+    assert layout is not None
+    rects = [c.rect for c, k in layout.cards if k == key] + [
+        r for b, r in layout.buttons if b.key == key
+    ]
+    click(app, (rects[-1].cx, rects[-1].cy))
+
+
+def test_clicking_hand_cards_builds_a_bank_trade():
+    app = play_app()
+    main_phase(app)
+    game = app.session.game
+    ratio = trade_ratios(game.state, 0)[0]
+    give(game, 0, (2 * ratio - game.state.hands[0][0], 0, 0, 0, 0))  # two batches of lumber
+    refresh(app)
+    press(app, "trade")  # T opens an empty offer, Esc closes it
+    assert app.trade_panel() is not None
+    press(app, "escape")
+    lumber = app.hand_bar().cards[0]
+    assert lumber.playable and app.trade_panel() is None
+    app.mouse = (lumber.rect.cx, lumber.rect.cy)
+    assert app.frame()[-1].texts[0].text == f"Lumber ×{2 * ratio}: click to trade"
+    for _ in range(2 * ratio):
+        click(app, app.mouse)
+    assert app.controller.offer[0][0] == 2 * ratio and app.hand_bar().cards[0].count == 0
+    assert "trade" in [layer.name for layer in app.frame()]
+    trade_click(app, ("want", 3))
+    trade_click(app, ("want", 4))
+    grain, ore = game.state.hands[0][3:]
+    trade_click(app, "bank")
+    assert [step.action.type for step in game.history[-2:]] == [ActionType.MARITIME_TRADE] * 2
+    assert game.state.hands[0][:1] + game.state.hands[0][3:] == [0, grain + 1, ore + 1]
+    assert app.trade_panel() is None
+
+
+def test_offering_to_players_then_cancelling():
+    app = play_app(engine=EngineConfig(allow_domestic_trade=True))
+    main_phase(app)
+    give(app.session.game, 0, (1, 0, 0, 0, 0))
+    refresh(app)
+    lumber = app.hand_bar().cards[0]
+    click(app, (lumber.rect.cx, lumber.rect.cy))
+    trade_click(app, ("want", 2))
+    layout = app.trade_layout()
+    assert layout is not None
+    app.mouse = (layout.panel.cx, layout.panel.cy)
+    assert app.hover_target() is None  # the panel covers the board
+    trade_click(app, "propose")
+    s = app.session
+    assert s.game.state.phase == Phase.TRADE_RESPONSE and not app.controller.active
+    panel = app.trade_panel()  # shown while the bots answer
+    assert panel is not None and panel.title == "Your trade offer" and not panel.buttons
+    run_bots(app)
+    panel = app.trade_panel()
+    assert panel is not None and panel.kind == "responses" and panel.buttons
+    trade_click(app, "cancel_trade")
+    assert s.game.state.phase == Phase.MAIN and app.trade_panel() is None
 
 
 def test_clicking_a_playable_development_card_plays_it():

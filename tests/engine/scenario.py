@@ -1,6 +1,8 @@
 """Helpers to build hand-made positions, plus independent reference checks of the rules."""
 
+from carla.engine import actions as A
 from carla.engine import rules
+from carla.engine.actions import Action
 from carla.engine.board import Board
 from carla.engine.config import EngineConfig
 from carla.engine.constants import (
@@ -69,6 +71,13 @@ def put_road(game: Game, player: int, edge: int) -> None:
     s.roads_left[player] -= 1
     s.road_lengths[player] = rules.longest_road_length(s, player)
     game.set_state(s)
+
+
+def one_for_one(give: int, receive: int) -> Action:
+    """The enumerated one-for-one domestic offer of `give` for `receive` (two resources)."""
+    action = A.ONE_FOR_ONE[give][receive]
+    assert action is not None, "a resource cannot be traded for itself"
+    return action
 
 
 def give(game: Game, player: int, counts) -> None:

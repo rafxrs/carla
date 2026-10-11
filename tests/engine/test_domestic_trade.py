@@ -1,6 +1,7 @@
 """Domestic trade transitions, limits, conservation, replay, and private information."""
 
 import random
+from typing import Any
 
 import pytest
 
@@ -11,10 +12,17 @@ from carla.engine.constants import NUM_RESOURCES, RESOURCE_CARDS_PER_TYPE
 from carla.engine.events import EventKind
 from carla.engine.game import Game, IllegalActionError
 from carla.engine.record import GameRecord
-from carla.engine.state import Phase
+from carla.engine.simulate import play_random_game
+from carla.engine.state import GameState, Phase
 from carla.eval.metrics import trade_metrics
 from carla.eval.runner import GameResult
-from tests.engine.scenario import check_invariants, finish_setup, give, post_setup_game
+from tests.engine.scenario import (
+    check_invariants,
+    finish_setup,
+    give,
+    one_for_one,
+    post_setup_game,
+)
 
 
 def offer(give: tuple[int, ...], receive: tuple[int, ...]) -> Action:
@@ -66,7 +74,7 @@ def test_offer_rules_and_hidden_hands_do_not_affect_proposer_legality():
             game.step(invalid)
     game.step(valid)
     assert game.phase == Phase.TRADE_RESPONSE
-    counter = A.ONE_FOR_ONE[1][0]
+    counter = one_for_one(1, 0)
     assert counter is not None and game.is_legal(counter)
     assert not game.is_legal(counter._replace(dev=0))
     for _ in range(3):
@@ -79,10 +87,10 @@ def test_offer_rules_and_hidden_hands_do_not_affect_proposer_legality():
 def test_responses_confirm_and_resource_conservation():
     game = trade_game()
     before = [game.state.bank[r] + sum(h[r] for h in game.state.hands) for r in range(5)]
-    proposal = offer((1, 0, 0, 0, 0), (0, 1, 0, 0, 0))
-    events = game.step(proposal)
+    terms = TradeOffer((1, 0, 0, 0, 0), (0, 1, 0, 0, 0))
+    events = game.step(offer(*terms))
     assert events[0].kind == EventKind.TRADE_PROPOSED
-    assert events[0].give == proposal.trade.give
+    assert events[0].give == terms.give
     assert game.decision_player == 1
     answer_all(game, A.ACCEPT_TRADE, A.ACCEPT_TRADE, A.REJECT_TRADE)
     assert set(game.legal_actions()) == {
@@ -109,7 +117,7 @@ def test_limits_cancellation_and_turn_reset():
             max_domestic_trades_per_turn=1,
         )
     )
-    proposal = A.ONE_FOR_ONE[0][1]
+    proposal = one_for_one(0, 1)
     game.step(proposal)
     answer_all(game, A.ACCEPT_TRADE, A.REJECT_TRADE, A.REJECT_TRADE)
     game.step(A.CANCEL_TRADE)
@@ -150,22 +158,23 @@ def test_multi_card_offer_is_validated_and_exchanged_atomically():
 
 def test_responder_counteroffer_is_public_and_executes_with_active_player():
     game = trade_game()
-    game.step(A.ONE_FOR_ONE[0][4])  # ask for unavailable ore
-    counter = offer((0, 1, 0, 0, 0), (2, 0, 0, 0, 0))
+    game.step(one_for_one(0, 4))  # ask for unavailable ore
+    terms = TradeOffer((0, 1, 0, 0, 0), (2, 0, 0, 0, 0))
+    counter = offer(*terms)
     assert counter not in game.legal_actions() and game.is_legal(counter)
     events = game.step(counter)
     assert events[0].kind == EventKind.TRADE_COUNTERED
     assert events[0].player == 1 and events[0].target == 0
-    assert events[0].give == counter.trade.give
+    assert events[0].give == terms.give
     state_copy = game.state.from_dict(game.state.to_dict())
-    assert state_copy.trade_counteroffers[1] == counter.trade
+    assert state_copy.trade_counteroffers[1] == terms
     game.step(A.REJECT_TRADE)
     game.step(A.REJECT_TRADE)
     assert A.CONFIRM_TRADE_WITH[1] in game.legal_actions()
     executed = game.step(A.CONFIRM_TRADE_WITH[1])[0]
     assert executed.kind == EventKind.TRADE_EXECUTED
-    assert executed.give == counter.trade.receive
-    assert executed.receive == counter.trade.give
+    assert executed.give == terms.receive
+    assert executed.receive == terms.give
     assert game.state.hands[0] == [0, 1, 0, 0, 0]
     assert game.state.hands[1] == [2, 1, 0, 0, 0]
     assert game.state.trade_counteroffers == [None] * 4
@@ -173,8 +182,8 @@ def test_responder_counteroffer_is_public_and_executes_with_active_player():
 
 def test_counteroffer_replays_from_the_initial_position():
     game = recordable_trade_game()
-    game.step(A.ONE_FOR_ONE[3][1])  # seat 1 has no brick
-    game.step(A.ONE_FOR_ONE[4][2])  # seat 1 offers ore for seat 0's wool
+    game.step(one_for_one(3, 1))  # seat 1 has no brick
+    game.step(one_for_one(4, 2))  # seat 1 offers ore for seat 0's wool
     game.step(A.REJECT_TRADE)
     game.step(A.REJECT_TRADE)
     game.step(A.CONFIRM_TRADE_WITH[1])
@@ -200,7 +209,7 @@ def test_invitation_accepts_an_unsolicited_offer_and_records_metrics():
     game.step(A.INVITE_TRADE)
     assert game.state.pending_trade is None
     assert A.ACCEPT_TRADE not in game.legal_actions()
-    game.step(A.ONE_FOR_ONE[4][2])
+    game.step(one_for_one(4, 2))
     game.step(A.REJECT_TRADE)
     game.step(A.REJECT_TRADE)
     game.step(A.CONFIRM_TRADE_WITH[1])
@@ -278,7 +287,7 @@ def test_snapshot_state_dict_and_exact_record_replay():
     partner, wanted = next(
         (p, r) for p in range(1, 4) for r, n in enumerate(game.state.hands[p]) if n and r != giver
     )
-    proposal = A.ONE_FOR_ONE[giver][wanted]
+    proposal = one_for_one(giver, wanted)
     game.step(proposal)
     snapshot = game.snapshot()
     state_copy = game.state.from_dict(game.state.to_dict())
@@ -318,5 +327,35 @@ def test_trade_config_limits_must_be_nonnegative():
         "max_domestic_trades_per_turn",
         "max_trade_cards_per_side",
     ):
-        with pytest.raises(ValueError, match="non-negative integer"):
-            EngineConfig(**{field: -1})
+        limits: dict[str, Any] = {field: -1}
+        with pytest.raises(ValueError, match="must be None or an integer"):
+            EngineConfig(**limits)
+    with pytest.raises(ValueError, match="max_trade_cards_per_side"):
+        EngineConfig(max_trade_cards_per_side=0)  # no offer could be made
+    assert EngineConfig(max_trade_proposals_per_turn=0).max_trade_proposals_per_turn == 0
+
+
+def test_offer_size_limit_none_is_unlimited():
+    game = trade_game()
+    give(game, 0, (3, 0, 0, 0, 0))
+    big = offer((5, 0, 0, 0, 0), (0, 1, 1, 1, 1))
+    assert not game.is_legal(big)  # five cards given, four allowed
+    unlimited = trade_game(EngineConfig(allow_domestic_trade=True, max_trade_cards_per_side=None))
+    give(unlimited, 0, (3, 0, 0, 0, 0))
+    assert unlimited.is_legal(big)
+
+
+def test_games_without_domestic_trade_serialize_as_before_it_existed():
+    record = GameRecord.from_game(play_random_game(5))
+    assert record.hashes is not None  # computed by the engine before domestic trade was added:
+    assert (len(record.hashes), record.hashes[0], record.hashes[100], record.hashes[-1]) == (
+        609,
+        "cce7db5bb979f437",
+        "cc933945038f6622",
+        "7e6eb11e67f22075",
+    )
+    plain = record.replay().state.to_dict()
+    assert "trade_responses" not in plain and "max_trade_cards_per_side" not in plain["config"]
+    assert GameState.from_dict(plain).to_dict() == plain
+    trading = Game(EngineConfig(allow_domestic_trade=True)).state.to_dict()
+    assert trading["trade_responses"] == 0 and trading["config"]["max_trade_cards_per_side"] == 4

@@ -51,6 +51,8 @@ def test_the_player_sees_only_its_own_cards():
     assert hand.seat == 0 and hand.title == "Your hand"
     assert hand.resources == tuple(s.game.state.hands[0])
     assert hand.dev == ((DevCard.VICTORY_POINT, 1, 0),)
+    offering = hand_view(s, offered=hand.resources)  # every card is in the trade panel
+    assert offering.resources == (0,) * 5
     assert me.vp_cards == 1 and me.vp == 3  # two setup settlements plus the hidden card
     assert other.vp_cards == 0 and other.vp == 2  # its two VP cards stay hidden
     assert (other.cards, other.dev_cards) == (s.game.state.hand_size(1), 3)  # sizes are public
@@ -140,7 +142,6 @@ SPECS = [
     ButtonSpec("end_turn", "End turn", "E", True),
     ButtonSpec("buy_dev", "Buy dev card", "B", True),
     ButtonSpec("play_dev", "Play dev card", "D", True),
-    ButtonSpec("bank_trade", "Bank trade", "T", False),
 ]
 
 
@@ -153,19 +154,19 @@ def apart(a: Rect, b: Rect) -> bool:
 
 
 def test_hand_bar_layout():
-    bar = layout_hand_bar(LAYOUT.hand, HAND, SPECS, frozenset({DevCard.KNIGHT}))
+    bar = layout_hand_bar(LAYOUT.hand, HAND, SPECS, frozenset({DevCard.KNIGHT}), frozenset({0, 1}))
     resources = [c for c in bar.cards if c.kind == "resource"]
     dev = [c for c in bar.cards if c.kind == "dev"]
     assert [(c.index, c.count) for c in resources] == list(enumerate(HAND.resources))
+    assert [c.playable for c in resources] == [True, False, False, False, False]  # no brick held
     # two knights, one bought this turn, then the victory point
     assert [(c.index, c.count, c.dimmed, c.playable) for c in dev] == [
         (DevCard.KNIGHT, 1, False, True),
         (DevCard.KNIGHT, 1, True, False),
         (DevCard.VICTORY_POINT, 1, False, False),
     ]
-    assert [b.id for b in bar.buttons] == ["bank_trade", "buy_dev", "roll", "end_turn"]
+    assert [b.id for b in bar.buttons] == ["buy_dev", "roll", "end_turn"]
     assert [(b.enabled, b.hotkey) for b in bar.buttons] == [
-        (False, "T"),
         (True, "B"),
         (False, "R"),
         (True, "E"),
@@ -201,17 +202,16 @@ def test_read_only_hand_bar_uses_the_whole_width():
 
 
 def test_hand_bar_drawing_and_tooltips():
-    bar = layout_hand_bar(LAYOUT.hand, HAND, SPECS, frozenset({DevCard.KNIGHT}))
+    bar = layout_hand_bar(LAYOUT.hand, HAND, SPECS, frozenset({DevCard.KNIGHT}), frozenset({3}))
     layer = Layer("ui")
     knight = next(c for c in bar.cards if c.kind == "dev")
     draw_hand_bar(layer, bar, (knight.rect.cx, knight.rect.cy))
     texts = [t.text for t in layer.texts]
-    assert "Your hand · 11 cards" in texts and {"Trade", "Buy dev", "Roll", "End turn"} <= set(
-        texts
-    )
+    assert "Your hand · 11 cards" in texts and {"Buy dev", "Roll", "End turn"} <= set(texts)
     assert texts.count("1") >= 4 and "5" in texts  # count badges (no badge on the empty slot)
     assert card_tooltip(knight) == "Knight: click to play"
-    assert card_tooltip(bar.cards[3]) == "Grain ×5"
+    assert card_tooltip(bar.cards[3]) == "Grain ×5: click to trade"
+    assert card_tooltip(bar.cards[4]) == "Ore ×3"
     new = next(c for c in bar.cards if c.dimmed)
     assert card_tooltip(new) == "Knight: bought this turn"
     vp = next(c for c in bar.cards if c.index == DevCard.VICTORY_POINT and c.kind == "dev")
@@ -228,5 +228,5 @@ def test_action_tiles_show_their_labels_all_or_none():
     assert not narrow.labelled
     layer = Layer("ui")
     draw_hand_bar(layer, narrow)
-    assert not {"Trade", "Buy dev", "Roll", "End turn"} & {t.text for t in layer.texts}
-    assert {"T", "B", "R", "E"} <= {t.text for t in layer.texts}  # hotkeys stay
+    assert not {"Buy dev", "Roll", "End turn"} & {t.text for t in layer.texts}
+    assert {"B", "R", "E"} <= {t.text for t in layer.texts}  # hotkeys stay

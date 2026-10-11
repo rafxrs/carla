@@ -1,10 +1,7 @@
 import pytest
 
 from carla.engine import actions as A
-from carla.engine.actions import TradeOffer
-from carla.engine.config import EngineConfig
 from carla.engine.constants import DevCard
-from carla.engine.state import Phase
 from carla.gui import theme
 from carla.gui.controller import Controller, Option, Picker
 from carla.gui.geometry import Rect
@@ -47,7 +44,7 @@ def test_buttons_hit_and_draw():
 ICONS = ["play", "pause", "back", "forward", "start", "end", "minus", "plus"]
 
 
-@pytest.mark.parametrize("icon", [*ICONS, "trade", "buy_card", "dice", "hourglass"])
+@pytest.mark.parametrize("icon", [*ICONS, "close", "trade", "buy_card", "dice", "hourglass"])
 def test_icons_are_drawn_from_shapes(icon):
     layer = Layer("ui")
     draw_icon(layer, icon, 50, 50, 20, theme.TEXT)
@@ -70,32 +67,22 @@ def test_slider():
 def pickers() -> list[Picker]:
     """One picker of every kind, from real positions."""
     out = []
-    game = post_setup_game(config=EngineConfig(allow_domestic_trade=True))
+    game = post_setup_game()
     for card in DevCard:
         give_dev(game, 0, card)
     give(game, 0, (4, 4, 4, 4, 4))
-    controller = Controller(0, domestic_trade=True)
-    for button, choices in (("play_dev", []), ("play_dev", [2]), ("play_dev", [3])):
+    controller = Controller(0)
+    for choices in ([], [2], [3]):
         controller.reset(game.state, game.legal_actions())
-        controller.press(button)
+        controller.press("play_dev")
         for key in choices:
             controller.choose(key)
         assert controller.picker is not None
         out.append(controller.picker)
-    for button in ("bank_trade", "trade"):
-        controller.reset(game.state, game.legal_actions())
-        controller.press(button)
-        assert controller.picker is not None
-        out.append(controller.picker)
-    controller.choose(("give", 0, 1))
-    assert controller.picker is not None
-    out.append(controller.picker)
-    s = game.state
-    s.phase, s.pending_trade = Phase.TRADE_RESPONSE, TradeOffer((1, 0, 0, 0, 0), (0, 1, 0, 0, 0))
-    controller.reset(s, [A.ACCEPT_TRADE, A.REJECT_TRADE])
-    assert controller.picker is not None
-    out.append(controller.picker)
-    controller.reset(s, [A.CONFIRM_TRADE_WITH[1], A.CANCEL_TRADE])
+    roller = post_setup_game(rolled=False)
+    give(roller, 0, (3, 0, 2, 2, 2))
+    roller.step(A.ROLL, outcome=(3, 4))
+    controller.reset(roller.state, roller.legal_actions())
     assert controller.picker is not None
     out.append(controller.picker)
     out.append(Picker("victim", "Steal a card from", (Option(1, "P1", player=1), Option(2, "P2"))))
@@ -115,53 +102,10 @@ def test_picker_layout_and_drawing(picker):
     for option, r in layout.options:
         assert layout.option_at(r.cx, r.cy) == option
     assert layout.option_at(p.x - 5, p.y - 5) is None
-    assert (layout.cancel is not None) == (picker.cancellable or picker.kind == "offer")
+    assert (layout.cancel is not None) == picker.cancellable
     layer = Layer("picker")
-    draw_picker(
-        layer, picker, layout, hovered=picker.options[0].key, offer=((1, 0, 0, 0, 0), (0,) * 5)
-    )
+    draw_picker(layer, picker, layout, hovered=picker.options[0].key)
     assert picker.title in {t.text for t in layer.texts}
-
-
-def test_offer_composer_has_a_stepper_per_resource_and_side():
-    picker = next(p for p in pickers() if p.kind == "offer")
-    layout = layout_picker(picker, AREA)
-    keys = {o.key for o, _ in layout.options}
-    assert keys == {(side, r, d) for side in ("give", "get") for r in range(5) for d in (1, -1)} | {
-        "propose",
-        "invite",
-    }
-
-
-def test_three_trade_partners_fit_the_smallest_window():
-    picker = Picker(
-        "confirm",
-        "Complete your trade",
-        (
-            *(
-                Option(
-                    seat,
-                    f"Trade with P{seat}",
-                    detail="Give 2 lumber, 1 wool, 1 grain\nGet 2 brick, 1 grain, 1 ore",
-                    player=seat,
-                )
-                for seat in (1, 2, 3)
-            ),
-            Option("cancel", "Cancel trade"),
-        ),
-        cancellable=False,
-    )
-    area = Rect(0, 0, 640, 450)
-    layout = layout_picker(picker, area)
-    assert area.contains(layout.panel.x, layout.panel.y)
-    assert area.contains(layout.panel.right, layout.panel.top)
-    assert all(
-        layout.panel.contains(rect.x, rect.y) and layout.panel.contains(rect.right, rect.top)
-        for _, rect in layout.options
-    )
-    layer = Layer("picker")
-    draw_picker(layer, picker, layout)
-    assert len([item for item in layer.texts if item.text.startswith("Give 2 lumber")]) == 3
 
 
 def test_resource_pickers_use_five_columns():
@@ -209,6 +153,9 @@ def test_cards_show_their_symbol_and_count():
     draw_card(new, Card("dev", DevCard.KNIGHT, 1, rect, dimmed=True))
     assert theme.CARD_BACK in colours(knight) and theme.CARD_BACK not in colours(new)
     assert Card("dev", DevCard.MONOPOLY, 1, rect).label == "Monopoly"
+    plus = Layer("ui")
+    draw_card(plus, Card("resource", 2, 1, rect), badge="+")  # a resource to ask for
+    assert [t.text for t in plus.texts] == ["+"]
     assert Card("resource", 4, 1, rect).label == "Ore"
 
 

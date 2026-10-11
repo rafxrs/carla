@@ -92,16 +92,20 @@ class GameState:
     discards_pending: list[int] = field(default_factory=_per_player(0))
     winner: int = -1
     pending_trade: TradeOffer | None = None
-    """Public domestic trade currently under negotiation."""
+    """Terms the current player offered in the negotiation under way (None: none, or it only
+    asked for offers). Like the rest of a negotiation, public."""
     trade_proposals_this_turn: int = 0
+    """Negotiations the current player opened this turn (offers and invitations)."""
     domestic_trades_this_turn: int = 0
+    """Domestic trades the current player completed this turn."""
     trade_responses: int = 0
-    """How many other seats have answered the current offer (0..3)."""
+    """Seats that have answered the negotiation (0..3), in turn order after the current player."""
     trade_acceptances: list[bool] = field(default_factory=lambda: [False] * NUM_PLAYERS)
+    """Seats that accepted `pending_trade`."""
     trade_counteroffers: list[TradeOffer | None] = field(
         default_factory=lambda: [None] * NUM_PLAYERS
     )
-    """One public counteroffer per responding seat, expressed from that seat's perspective."""
+    """Each seat's counteroffer, from that seat's side (what it gives, what it wants)."""
 
     @classmethod
     def initial(cls, board: Board, config: EngineConfig) -> "GameState":
@@ -119,19 +123,21 @@ class GameState:
         return new
 
     def to_dict(self) -> dict[str, Any]:
-        """JSON-compatible representation (inverse of `from_dict`)."""
+        """JSON-compatible representation (inverse of `from_dict`). Without domestic trade, the
+        negotiation fields (then always at their defaults) are left out, so such a state
+        serializes and hashes exactly as before domestic trade existed."""
         out: dict[str, Any] = {}
+        trading = self.config.allow_domestic_trade
         for f in fields(self):
+            if f.name in _NEGOTIATION and not trading:
+                continue
             value = getattr(self, f.name)
             if f.name in ("board", "config"):
                 value = value.to_dict()
-            elif f.name == "pending_trade" and value is not None:
-                value = [list(value.give), list(value.receive)]
+            elif f.name == "pending_trade":
+                value = _offer_to_json(value)
             elif f.name == "trade_counteroffers":
-                value = [
-                    None if offer is None else [list(offer.give), list(offer.receive)]
-                    for offer in value
-                ]
+                value = [_offer_to_json(offer) for offer in value]
             elif isinstance(value, list):
                 value = [row[:] if isinstance(row, list) else row for row in value]
             elif isinstance(value, IntEnum):
@@ -141,20 +147,18 @@ class GameState:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GameState":
+        """Fields missing from `data` (the negotiation without domestic trade) get defaults."""
         kwargs = dict(data)
         kwargs["board"] = Board.from_dict(data["board"])
         kwargs["config"] = EngineConfig.from_dict(data["config"])
         kwargs["phase"] = Phase(data["phase"])
-        if data.get("pending_trade") is not None:
-            give, receive = data["pending_trade"]
-            kwargs["pending_trade"] = TradeOffer(tuple(give), tuple(receive))
+        kwargs["pending_trade"] = _offer_from_json(data["pending_trade"])
         for name in _LISTS:
             if name in data:
                 kwargs[name] = list(data[name])
         if "trade_counteroffers" in data:
             kwargs["trade_counteroffers"] = [
-                None if offer is None else TradeOffer(tuple(offer[0]), tuple(offer[1]))
-                for offer in data["trade_counteroffers"]
+                _offer_from_json(o) for o in data["trade_counteroffers"]
             ]
         for name in _MATRICES:
             kwargs[name] = [list(row) for row in data[name]]
@@ -169,3 +173,19 @@ _LISTS = tuple(
     f.name for f in fields(GameState) if f.name not in _MATRICES and str(f.type).startswith("list[")
 )
 _SHARED = tuple(f.name for f in fields(GameState) if f.name not in _LISTS + _MATRICES)
+_NEGOTIATION = (
+    "trade_proposals_this_turn",
+    "domestic_trades_this_turn",
+    "trade_responses",
+    "trade_acceptances",
+    "trade_counteroffers",
+)
+"""Fields added with domestic trade (`pending_trade` was reserved for it from the start)."""
+
+
+def _offer_to_json(offer: TradeOffer | None) -> list[list[int]] | None:
+    return None if offer is None else [list(offer.give), list(offer.receive)]
+
+
+def _offer_from_json(data: list[list[int]] | None) -> TradeOffer | None:
+    return None if data is None else TradeOffer(tuple(data[0]), tuple(data[1]))

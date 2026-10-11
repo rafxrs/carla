@@ -71,6 +71,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--delay", type=float, default=0.6, help="seconds between bot moves at 1x")
     p.add_argument(
+        "--no-trading",
+        dest="trading",
+        action="store_false",
+        help="no trades between players (bank and port trades remain)",
+    )
+    p.add_argument(
         "--config", type=Path, help="experiment config (engine rules, seed, eval.agents)"
     )
     p.add_argument(
@@ -212,7 +218,8 @@ def _gui(args) -> int:
     if seed is None and args.config is None:  # a new board each launch, still reproducible
         seed = random.randrange(2**31)
         print(f"carla gui: seed {seed} (pass --seed {seed} to play this board again)")
-    overrides = [*args.overrides, *([f"seed={seed}"] if seed is not None else [])]
+    trading = f"engine.allow_domestic_trade={str(args.trading).lower()}"  # --set may override
+    overrides = [trading, *args.overrides, *([f"seed={seed}"] if seed is not None else [])]
     config = load_config(args.config, overrides)
     mode = "replay" if args.record is not None else "watch" if args.watch else "play"
     default = config.eval.agents if mode == "watch" else ("heuristic",)

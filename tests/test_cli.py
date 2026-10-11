@@ -113,10 +113,23 @@ def test_gui_command_options(gui_calls, tmp_path):
     assert watch.mode == "watch" and watch.opponents == ("heuristic", "random", "random", "random")
     assert main(["gui"]) == 0 and gui_calls[-1].mode == "play"
     assert gui_calls[-1].opponents == ("heuristic",) and gui_calls[-1].engine.max_turns is None
+    assert gui_calls[-1].engine.allow_domestic_trade  # players trade by default
     record = tmp_path / "game.json"
     record.write_text("{}", encoding="utf-8")
     assert main(["gui", str(record)]) == 0
     assert gui_calls[-1].mode == "replay" and gui_calls[-1].record == record
+
+
+def test_gui_trading_flag_and_limits_from_a_config(gui_calls):
+    assert main(["gui", "--no-trading"]) == 0 and not gui_calls[-1].engine.allow_domestic_trade
+    assert main(["gui", "--config", "configs/bots.yaml"]) == 0  # its engine does not trade
+    assert gui_calls[-1].engine.allow_domestic_trade  # only the flag turns trading off
+    config = "configs/experiments/domestic_trade.yaml"
+    args = ["gui", "--config", config, "--set", "engine.max_trade_cards_per_side=2"]
+    assert main(args) == 0
+    engine = gui_calls[-1].engine
+    assert engine.allow_domestic_trade and engine.max_trade_cards_per_side == 2
+    assert main([*args, "--no-trading"]) == 0 and not gui_calls[-1].engine.allow_domestic_trade
 
 
 def test_gui_command_errors(gui_calls, tmp_path, capsys, monkeypatch):

@@ -62,7 +62,7 @@ def draw_button(layer: Layer, button: Button, hovered: bool = False) -> None:
 
 def draw_icon(layer: Layer, icon: str, cx: float, cy: float, size: float, color: Color) -> None:
     """Playback, stepper and action glyphs, `size` pixels tall: play, pause, back, forward,
-    start, end, minus, plus, trade, buy_card, dice, hourglass."""
+    start, end, minus, plus, close, trade, buy_card, dice, hourglass."""
     h = size / 2
 
     def play(x: float, direction: int = 1) -> None:
@@ -94,6 +94,9 @@ def draw_icon(layer: Layer, icon: str, cx: float, cy: float, size: float, color:
         layer.rect(cx - h, cy - h * 0.16, size, h * 0.32, color)
         if icon == "plus":
             layer.rect(cx - h * 0.16, cy - h, h * 0.32, size, color)
+    elif icon == "close":  # a cross
+        layer.line(cx - h, cy - h, cx + h, cy + h, h * 0.3, color)
+        layer.line(cx - h, cy + h, cx + h, cy - h, h * 0.3, color)
     elif icon == "trade":  # one arrow each way
         for d, y in ((1, cy + h * 0.4), (-1, cy - h * 0.4)):
             neck = cx + h * 0.3 * d
@@ -170,10 +173,6 @@ _TITLE_H, _DETAIL_H, _PAD, _GAP = 34, 22, 16, 10
 
 def layout_picker(picker: Picker, area: Rect) -> PickerLayout:
     """Centre the dialog in `area`: a grid of option cells and an optional Cancel button."""
-    if picker.kind == "offer":
-        return _layout_offer(picker, area)
-    if picker.kind == "confirm":
-        return _layout_trade_confirm(picker, area)
     resources = any(o.resource >= 0 for o in picker.options)
     columns = min(len(picker.options), 5 if resources else 3) or 1
     cell_w, cell_h = (104, 74) if resources else (176, 52)
@@ -197,59 +196,11 @@ def layout_picker(picker: Picker, area: Rect) -> PickerLayout:
     return PickerLayout(panel, tuple(cells), cancel)
 
 
-def _layout_offer(picker: Picker, area: Rect) -> PickerLayout:
-    """Trade offer composer: per resource a give and a get counter with +/- buttons."""
-    width, height = 600, 300
-    panel = Rect(area.cx - width / 2, area.cy - height / 2, width, height)
-    by_key = {o.key: o for o in picker.options}
-    cells = []
-    col_w = (width - 2 * _PAD - 110) / 5
-    for side, row_y in (("give", panel.top - 120), ("get", panel.top - 190)):
-        for r in range(5):
-            x = panel.x + _PAD + 110 + r * col_w
-            for delta, dx in ((-1, 6), (1, col_w - 34)):
-                option = by_key.get((side, r, delta))
-                if option is not None:
-                    cells.append((option, Rect(x + dx, row_y, 28, 28)))
-    action_w = 150
-    propose = by_key.get("propose")
-    if propose is not None:
-        cells.append((propose, Rect(panel.right - _PAD - action_w, panel.y + _PAD, action_w, 34)))
-    invite = by_key.get("invite")
-    if invite is not None:
-        cells.append((invite, Rect(panel.cx - action_w / 2, panel.y + _PAD, action_w, 34)))
-    cancel = Rect(panel.x + _PAD, panel.y + _PAD, action_w, 34)
-    return PickerLayout(panel, tuple(cells), cancel)
-
-
-def _layout_trade_confirm(picker: Picker, area: Rect) -> PickerLayout:
-    """Give each partner's full terms a readable row; keep Cancel in the footer."""
-    partners = [option for option in picker.options if option.key != "cancel"]
-    cancel = next((option for option in picker.options if option.key == "cancel"), None)
-    width = min(560, area.w - 20)
-    row_h = 72
-    height = 2 * _PAD + _TITLE_H + (_DETAIL_H if picker.detail else 0)
-    height += len(partners) * (row_h + _GAP) + (44 if cancel else 0)
-    panel = Rect(area.cx - width / 2, area.cy - height / 2, width, height)
-    top = panel.top - _PAD - _TITLE_H - (_DETAIL_H if picker.detail else 0)
-    cells = [
-        (option, Rect(panel.x + _PAD, top - (i + 1) * row_h - i * _GAP, width - 2 * _PAD, row_h))
-        for i, option in enumerate(partners)
-    ]
-    if cancel is not None:
-        cells.append((cancel, Rect(panel.cx - 75, panel.y + _PAD, 150, 34)))
-    return PickerLayout(panel, tuple(cells), None)
-
-
 def draw_picker(
-    layer: Layer,
-    picker: Picker,
-    layout: PickerLayout,
-    hovered: Hashable = None,
-    offer: tuple[Sequence[int], Sequence[int]] | None = None,
+    layer: Layer, picker: Picker, layout: PickerLayout, hovered: Hashable = None
 ) -> None:
     """The dialog, its options and Cancel; `hovered` is the key of the option under the mouse
-    ("cancel" for the Cancel button); `offer` gives the counters of the trade composer."""
+    ("cancel" for the Cancel button)."""
     p = layout.panel
     layer.rounded_rect(p.x + 3, p.y - 4, p.w, p.h, 10, theme.with_alpha(theme.BLACK, 90))
     layer.rounded_rect(p.x, p.y, p.w, p.h, 10, theme.PANEL)
@@ -275,65 +226,27 @@ def draw_picker(
             "center",
             "center",
         )
-    if picker.kind == "offer":
-        _draw_offer(layer, layout, offer or ((0,) * 5, (0,) * 5))
-    numbered = picker.kind != "offer" and len(layout.options) <= 9
+    numbered = len(layout.options) <= 9
     for i, (option, rect) in enumerate(layout.options):
         _draw_option(layer, option, rect, option.key == hovered, i + 1 if numbered else 0)
     if layout.cancel is not None:
         c = layout.cancel
-        draw_button(layer, Button("cancel", picker.cancel_label, c), hovered == "cancel")
+        draw_button(layer, Button("cancel", "Cancel (Esc)", c), hovered == "cancel")
 
 
 def _draw_option(layer: Layer, option: Option, r: Rect, hovered: bool, number: int) -> None:
     enabled = option.enabled
-    stepper = option.label in ("+", "-")
-    if option.resource >= 0 and not stepper:
+    if option.resource >= 0:
         _draw_resource_option(layer, option, r, hovered)
     else:
-        if stepper:
-            fill = theme.BUTTON_HOVER if hovered and enabled else theme.BUTTON
-            fill = fill if enabled else theme.BUTTON_DISABLED
-            layer.rounded_rect(r.x, r.y, r.w, r.h, 5, fill)
-            ink = theme.TEXT if enabled else theme.BUTTON_TEXT_DISABLED
-            draw_icon(
-                layer, "plus" if option.label == "+" else "minus", r.cx, r.cy, r.h * 0.45, ink
-            )
-            return
-        lines = option.detail.splitlines()
-        label = "" if len(lines) == 2 else option.label
-        draw_button(layer, Button(str(option.key), label, r, enabled), hovered)
+        draw_button(layer, Button(str(option.key), option.label, r, enabled), hovered)
         if option.player >= 0:
             layer.circle(r.x + 16, r.cy, 7, theme.PLAYER[option.player])
         if option.detail:
             ink = theme.TEXT_MUTED if enabled else theme.BUTTON_TEXT_DISABLED
-            if len(lines) == 2:
-                title_ink = theme.TEXT if enabled else theme.BUTTON_TEXT_DISABLED
-                layer.text(
-                    option.label,
-                    r.cx,
-                    r.top - 18,
-                    theme.FONT,
-                    title_ink,
-                    enabled,
-                    "center",
-                    "center",
-                )
-                for i, line in enumerate(lines):
-                    layer.text(
-                        line,
-                        r.cx,
-                        r.top - 37 - i * 16,
-                        theme.FONT_SMALL,
-                        ink,
-                        False,
-                        "center",
-                        "center",
-                    )
-            else:
-                layer.text(
-                    option.detail, r.cx, r.y + 7, theme.FONT_SMALL, ink, False, "center", "bottom"
-                )
+            layer.text(
+                option.detail, r.cx, r.y + 7, theme.FONT_SMALL, ink, False, "center", "bottom"
+            )
     if number:
         layer.text(
             str(number),
@@ -365,23 +278,6 @@ def _draw_resource_option(layer: Layer, option: Option, r: Rect, hovered: bool) 
         )
 
 
-def _draw_offer(
-    layer: Layer, layout: PickerLayout, offer: tuple[Sequence[int], Sequence[int]]
-) -> None:
-    p = layout.panel
-    col_w = (p.w - 2 * _PAD - 110) / 5
-    for r in range(5):
-        x = p.x + _PAD + 110 + r * col_w + col_w / 2
-        resource_chip(layer, r, x, p.top - 82, 24, theme.TERRAIN[r])
-    for (label, counts), y in zip(
-        (("You give", offer[0]), ("You get", offer[1])), (p.top - 106, p.top - 176), strict=True
-    ):
-        layer.text(label, p.x + _PAD, y, theme.FONT, theme.TEXT_MUTED, False, "left", "center")
-        for r in range(5):
-            x = p.x + _PAD + 110 + r * col_w + col_w / 2
-            layer.text(str(counts[r]), x, y, theme.FONT_LARGE, theme.TEXT, True, "center", "center")
-
-
 def resource_chip(
     layer: Layer, resource: int, cx: float, cy: float, size: float, fill: Color
 ) -> None:
@@ -402,7 +298,8 @@ CARD_RATIO = 0.72
 
 @dataclass(frozen=True)
 class Card:
-    """A card of the hand bar: a resource or a development card and how many are held."""
+    """A card of the hand bar or the trade panel: a resource or a development card and how
+    many."""
 
     kind: str
     """"resource" or "dev"."""
@@ -411,9 +308,9 @@ class Card:
     count: int
     rect: Rect
     dimmed: bool = False
-    """Development cards bought this turn, which cannot be played yet."""
+    """Development cards bought this turn, or a resource that cannot be asked for now."""
     playable: bool = False
-    """A click plays it."""
+    """A click plays it (a development card) or trades it (a resource)."""
 
     @property
     def label(self) -> str:
@@ -426,8 +323,9 @@ def card_at(cards: Sequence[Card], x: float, y: float) -> Card | None:
     return next((c for c in reversed(cards) if c.rect.contains(x, y)), None)
 
 
-def draw_card(layer: Layer, card: Card, hovered: bool = False) -> None:
-    """An upright card with its symbol and a count badge; an empty slot when none is held."""
+def draw_card(layer: Layer, card: Card, hovered: bool = False, badge: str | None = None) -> None:
+    """An upright card with its symbol and a badge (the count unless `badge` is given); an empty
+    slot when none is held."""
     r = card.rect
     radius = max(3.0, r.w * 0.14)
     resource = card.kind == "resource"
@@ -457,11 +355,13 @@ def draw_card(layer: Layer, card: Card, hovered: bool = False) -> None:
         draw_dev_glyph(layer, card.index, x + w / 2, y + h * 0.47, size, ink, face)
     if hovered and card.playable:
         layer.rounded_frame(x, y, w, h, radius, 2, theme.ACCENT)
-    badge = max(7.0, w * 0.19)
-    bx, by = x + badge * 0.55, y + h - badge * 0.55
-    layer.circle(bx, by, badge + 1.5, theme.PANEL_EDGE)
-    layer.circle(bx, by, badge, theme.PANEL)
-    layer.text(str(card.count), bx, by, theme.FONT_SMALL, theme.TEXT, True, "center", "center")
+    disc = max(7.0, w * 0.19)
+    bx, by = x + disc * 0.55, y + h - disc * 0.55
+    layer.circle(bx, by, disc + 1.5, theme.PANEL_EDGE)
+    layer.circle(bx, by, disc, theme.PANEL)
+    text = str(card.count) if badge is None else badge
+    ink = theme.TEXT if not card.dimmed else theme.TEXT_DIM
+    layer.text(text, bx, by, theme.FONT_SMALL, ink, True, "center", "center")
 
 
 def draw_resource_glyph(
