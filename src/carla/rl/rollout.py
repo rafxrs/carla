@@ -21,28 +21,33 @@ def collect_rollout(
     num_steps: int,
     obs: dict | None = None,
     episode_seed: int | None = None,
+    policy_version: int = 0,
 ) -> tuple[RolloutBatch, dict]:
     """Play `num_steps` learner decisions (resetting on episode end) and return the batch and
     the observation to continue from. Recurrent state is not handled yet (TODO(rl))."""
     if obs is None:
         obs, _ = env.reset(seed=episode_seed)
+    if num_steps <= 0:
+        raise ValueError("num_steps must be positive")
+    device = next(policy.parameters()).device
+    policy.eval()
     steps: list[dict] = []
     actions, log_probs, values, rewards, dones = [], [], [], [], []
     for _ in range(num_steps):
-        batch = batch_observations([obs])
+        batch = batch_observations([obs], device=device)
         out = policy(batch)
         dist = out.distribution(batch["masks"])
         heads = dist.sample()
         steps.append(obs)
-        actions.append(heads[0].numpy())
+        actions.append(heads[0].cpu().numpy())
         log_probs.append(dist.log_prob(heads).item())
         values.append(out.value.item())
-        obs, reward, terminated, truncated, _ = env.step(heads[0].numpy())
+        obs, reward, terminated, truncated, _ = env.step(heads[0].cpu().numpy())
         rewards.append(reward)
         dones.append(terminated or truncated)
         if terminated or truncated:
             obs, _ = env.reset()
-    last_value = policy(batch_observations([obs])).value.item()
+    last_value = policy(batch_observations([obs], device=device)).value.item()
     stacked = batch_observations(steps)
     batch = RolloutBatch(
         observations=_to_numpy(stacked),
@@ -52,12 +57,13 @@ def collect_rollout(
         rewards=np.asarray(rewards, dtype=np.float32),
         dones=np.asarray(dones, dtype=np.float32),
         last_value=last_value,
+        policy_version=policy_version,
     )
     return batch, obs
 
 
 def _to_numpy(tree: dict) -> dict:
-    return {k: _to_numpy(v) if isinstance(v, dict) else v.numpy() for k, v in tree.items()}
+    return {k: _to_numpy(v) if isinstance(v, dict) else v.cpu().numpy() for k, v in tree.items()}
 
 
 class RolloutWorker:

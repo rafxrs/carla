@@ -82,7 +82,10 @@ class FactoredDistribution:
 
         def h(key: str) -> Tensor:
             lp = self.logp[key]
-            return -torch.where(lp > -torch.inf, lp.exp() * lp, 0.0).sum(1)
+            # Masked entries are -inf. Keep the backward pass finite as well as the value:
+            # torch.where(lp.exp() * lp, 0) would still evaluate 0 * -inf in its gradient.
+            safe_lp = torch.where(torch.isfinite(lp), lp, torch.zeros_like(lp))
+            return -(lp.exp() * safe_lp).sum(1)
 
         p_type, p_dev = self.logp["type"].exp(), self.logp["dev"].exp()
         dev_h = h("dev")

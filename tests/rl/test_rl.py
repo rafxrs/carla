@@ -50,3 +50,45 @@ def test_rollout_and_checkpoint_roundtrip(tmp_path):
     assert meta["counters"] == {"env_steps": 40} and meta["config"]["name"] == "default"
     for a, b in zip(policy.parameters(), clone.parameters(), strict=True):
         assert torch.equal(a, b)
+
+
+def test_ppo_update_changes_finite_weights_and_rejects_stale_batch():
+    torch = pytest.importorskip("torch")
+    from carla.config import ModelConfig, PPOConfig
+    from carla.engine.config import EngineConfig
+    from carla.envs import CatanEnv
+    from carla.models import build_policy
+    from carla.rl.ppo import PPOLearner
+    from carla.rl.rollout import collect_rollout
+
+    torch.manual_seed(2)
+    policy = build_policy(ModelConfig(hidden_dim=16, mlp_layers=1))
+    learner = PPOLearner(policy, PPOConfig(epochs=1, minibatch_size=8))
+    before = [parameter.detach().clone() for parameter in policy.parameters()]
+    batch, _ = collect_rollout(CatanEnv(EngineConfig(max_turns=12)), policy, 8, episode_seed=2)
+    stats = learner.update([batch])
+    assert learner.version == 1
+    assert all(np.isfinite(value) for value in stats.values())
+    assert all(torch.isfinite(parameter).all() for parameter in policy.parameters())
+    assert any(
+        not torch.equal(old, new) for old, new in zip(before, policy.parameters(), strict=True)
+    )
+    with pytest.raises(ValueError, match="current policy version"):
+        learner.update([batch])
+
+
+def test_masked_entropy_has_finite_gradients():
+    torch = pytest.importorskip("torch")
+    from carla.config import ModelConfig
+    from carla.envs import CatanEnv
+    from carla.models import build_policy
+    from carla.models.base import batch_observations
+
+    policy = build_policy(ModelConfig(hidden_dim=16, mlp_layers=1))
+    obs, _ = CatanEnv().reset(seed=7)
+    batch = batch_observations([obs])
+    policy(batch).distribution(batch["masks"]).entropy().mean().backward()
+    assert all(
+        parameter.grad is None or torch.isfinite(parameter.grad).all()
+        for parameter in policy.parameters()
+    )

@@ -1,7 +1,7 @@
 # CARLA - Catan Advanced Reinforcement Learning Agent
 
 A powerful Deep RL catan agent.
-CARLA learns four-player Settlers of Catan by self-play PPO on top of its own deterministic rules engine.
+CARLA is a four-player Settlers of Catan reinforcement-learning project built on its own deterministic rules engine. A synchronous MLP PPO baseline trains against fixed bots; self-play is planned.
 
 ## Status
 
@@ -13,7 +13,7 @@ CARLA learns four-player Settlers of Catan by self-play PPO on top of its own de
 | `agents/` | eval/bots  | Random and heuristic bots, including domestic proposals and counteroffers when enabled. |
 | `eval/`   | eval/bots  | Seeded tournaments with seat rotation and Wilson CIs, multi-process. Recorded games support trade feasibility, acceptance, and execution metrics. Plots: TODO. |
 | `models/` | models     | Masked factored distribution and MLP baseline handle one-for-one offers. GNN, set attention, belief module, and variable-length trade decoder remain TODOs. |
-| `rl/`     | RL         | GAE, rollout collection, checkpoints, PPO update, async workers, opponent pool.                                                                                                                                                                           |
+| `rl/`     | RL         | Synchronous MLP PPO, rollout collection, resumable checkpoints, and fixed-bot evaluation. Parallel workers and self-play opponent pools remain TODOs. |
 | `gui/`    | GUI        | Arcade play, watch, and replay modes. Click resource cards to build a trade, then send it to the bank or the other players; offers, answers and counteroffers show their cards. Player trading is on unless `--no-trading`. |
 
 The domestic trade protocol, defaults, and extension points are documented in
@@ -43,13 +43,16 @@ carla simulate --games 5 --agents heuristic random random random --config config
 carla replay runs/games/game_0000.json.gz --step 120   # position after line #120 of game_0000.txt
 carla tournament --config configs/bots.yaml            # win rates with 95% CIs
 carla config configs/experiments/gnn.yaml model.belief=gru   # print a resolved config
-carla train configs/smoke.yaml       # dry run until the PPO update lands
+carla train configs/smoke.yaml       # short end-to-end PPO run
+carla train configs/experiments/ppo_mlp_baseline.yaml
+carla train configs/experiments/ppo_mlp_baseline.yaml --resume runs/<run>/latest.pt ppo.total_env_steps=200000
+carla evaluate runs/<run>/latest.pt --opponent heuristic --boards 50 --seed 10000
 carla gui --play                   # needs the gui extra; play against 3 bots with trading on
 carla gui --play --no-trading                     # bank and port trades only
 carla gui --watch --opponents heuristic,random    # a live bot game with play/pause/step/seek
 carla gui runs/games/game_0000.json.gz            # replay a record
 python scripts/benchmark_engine.py
-sbatch --array=0-2 scripts/slurm/train.sbatch configs/experiments/mlp.yaml   # 3 seeds
+sbatch --array=0-2 scripts/slurm/train.sbatch configs/experiments/ppo_mlp_baseline.yaml
 ```
 
 ## Layout
@@ -100,7 +103,7 @@ Three contracts connect the workstreams:
 2. **Action masks**: `envs/action_space.py` documents the heads and the mask table.
 3. **Policy output**: `models/base.py` defines `PolicyOutput`, and `FactoredDistribution` samples it, scores log-probs and computes the exact entropy.
 
-Planned training loop (semi-asynchronous PPO, `rl/`):
+Current training uses one Gymnasium environment, one MLP policy, and on-policy PPO updates. See [docs/ppo_mlp_baseline.md](docs/ppo_mlp_baseline.md) for the supported settings and checkpoint/evaluation protocol. The planned semi-asynchronous self-play design is:
 
 ```mermaid
 flowchart LR

@@ -35,9 +35,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--workers", type=int)
     p.add_argument("--records", type=Path, help="save every game record here")
 
-    p = commands.add_parser("train", help="train a policy (dry run until PPO lands)")
+    p = commands.add_parser("train", help="train the synchronous MLP PPO baseline")
     p.add_argument("config", type=Path)
+    p.add_argument("--resume", type=Path, help="resume from a training checkpoint")
     p.add_argument("overrides", nargs="*", help="dotted overrides, e.g. ppo.learning_rate=1e-4")
+
+    p = commands.add_parser("evaluate", help="evaluate a checkpoint with seat rotation")
+    p.add_argument("checkpoint", type=Path)
+    p.add_argument("--opponent", choices=("random", "heuristic"), default="heuristic")
+    p.add_argument("--boards", type=int, default=10, help="held-out boards, each played in 4 seats")
+    p.add_argument("--seed", type=int, default=10_000)
 
     p = commands.add_parser("config", help="print a fully resolved config")
     p.add_argument("config", type=Path, nargs="?")
@@ -95,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
         "replay": _replay,
         "tournament": _tournament,
         "train": _train,
+        "evaluate": _evaluate,
         "config": _config,
         "gui": _gui,
     }[args.command](args)
@@ -179,7 +187,21 @@ def _tournament(args) -> int:
 def _train(args) -> int:
     from carla.rl.train import train
 
-    train(load_config(args.config, args.overrides))
+    train(load_config(args.config, args.overrides), resume=args.resume)
+    return 0
+
+
+def _evaluate(args) -> int:
+    from carla.rl.evaluate import evaluate_checkpoint
+
+    result = evaluate_checkpoint(
+        args.checkpoint, opponent=args.opponent, boards=args.boards, seed=args.seed
+    )
+    print(
+        f"policy vs {result.opponent}: {result.wins}/{result.games} wins "
+        f"({result.win_rate:.3f}, 95% CI [{result.ci_low:.3f}, {result.ci_high:.3f}]); "
+        f"mean VP {result.mean_vp:.2f}"
+    )
     return 0
 
 
