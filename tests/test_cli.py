@@ -139,6 +139,75 @@ def test_train_resume_and_evaluate(tmp_path, capsys):
     )
 
 
+def test_batched_training_exact_budget_and_resume(tmp_path):
+    torch = pytest.importorskip("torch")
+    overrides = [
+        "runtime.envs_per_worker=3",
+        "ppo.rollout_steps=2",
+        "ppo.epochs=1",
+        "model.hidden_dim=16",
+        "model.mlp_layers=1",
+        "engine.max_turns=12",
+        f"runtime.output_dir={tmp_path}",
+    ]
+    assert main(["train", "configs/smoke.yaml", "ppo.total_env_steps=12", *overrides]) == 0
+    (run,) = tmp_path.iterdir()
+    checkpoint = run / "latest.pt"
+    first = torch.load(checkpoint, weights_only=False)
+    assert first["counters"] == {"env_steps": 12, "updates": 2}
+    assert len(first["training_state"]["envs"]) == 3
+    assert len(first["training_state"]["observations"]) == 3
+    assert (
+        main(
+            [
+                "train",
+                "configs/smoke.yaml",
+                "--resume",
+                str(checkpoint),
+                "ppo.total_env_steps=24",
+                *overrides,
+            ]
+        )
+        == 0
+    )
+    resumed = torch.load(checkpoint, weights_only=False)
+    assert resumed["counters"] == {"env_steps": 24, "updates": 4}
+    reference_dir = tmp_path / "reference"
+    assert (
+        main(
+            [
+                "train",
+                "configs/smoke.yaml",
+                "ppo.total_env_steps=24",
+                *overrides[:-1],
+                f"runtime.output_dir={reference_dir}",
+            ]
+        )
+        == 0
+    )
+    (reference_run,) = reference_dir.iterdir()
+    reference = torch.load(reference_run / "latest.pt", weights_only=False)
+    assert all(
+        torch.equal(value, reference["policy"][name]) for name, value in resumed["policy"].items()
+    )
+    remainder_dir = tmp_path / "remainder"
+    assert (
+        main(
+            [
+                "train",
+                "configs/smoke.yaml",
+                "ppo.total_env_steps=14",
+                *overrides[:-1],
+                f"runtime.output_dir={remainder_dir}",
+            ]
+        )
+        == 0
+    )
+    (remainder_run,) = remainder_dir.iterdir()
+    remainder = torch.load(remainder_run / "latest.pt", weights_only=False)
+    assert remainder["counters"] == {"env_steps": 14, "updates": 3}
+
+
 @pytest.fixture
 def gui_calls(monkeypatch):
     import carla.gui.app

@@ -13,7 +13,7 @@ CARLA is a four-player Settlers of Catan reinforcement-learning project built on
 | `agents/` | eval/bots  | Random and heuristic bots, including domestic proposals and counteroffers when enabled. |
 | `eval/`   | eval/bots  | Seeded tournaments with seat rotation and Wilson CIs, multi-process. Recorded games support trade feasibility, acceptance, and execution metrics. Plots: TODO. |
 | `models/` | models     | Masked factored distribution and MLP baseline handle one-for-one offers. GNN, set attention, belief module, and variable-length trade decoder remain TODOs. |
-| `rl/`     | RL         | Synchronous MLP PPO, rollout collection, resumable checkpoints, and fixed-bot evaluation. Parallel workers and self-play opponent pools remain TODOs. |
+| `rl/`     | RL         | Synchronous MLP PPO with batched policy inference across environments, resumable checkpoints, and fixed-bot evaluation. Parallel workers and self-play opponent pools remain TODOs. |
 | `gui/`    | GUI        | Arcade play, watch, and replay modes. Click resource cards to build a trade, then send it to the bank or the other players; offers, answers and counteroffers show their cards. Player trading is on unless `--no-trading`. |
 
 The domestic trade protocol, defaults, and extension points are documented in
@@ -103,7 +103,7 @@ Three contracts connect the workstreams:
 2. **Action masks**: `envs/action_space.py` documents the heads and the mask table.
 3. **Policy output**: `models/base.py` defines `PolicyOutput`, and `FactoredDistribution` samples it, scores log-probs and computes the exact entropy.
 
-Current training uses one Gymnasium environment, one MLP policy, and on-policy PPO updates. See [docs/ppo_mlp_baseline.md](docs/ppo_mlp_baseline.md) for the supported settings and checkpoint/evaluation protocol. The planned semi-asynchronous self-play design is:
+Current training batches one MLP policy over several Gymnasium environments in one process and performs on-policy PPO updates. See [docs/ppo_mlp_baseline.md](docs/ppo_mlp_baseline.md) for the supported settings and checkpoint/evaluation protocol. The planned semi-asynchronous self-play design is:
 
 ```mermaid
 flowchart LR

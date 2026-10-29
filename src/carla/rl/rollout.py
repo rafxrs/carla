@@ -1,10 +1,10 @@
 """Experience collection.
 
-`collect_rollout` is the synchronous reference (one env, one process). The training setup is
-semi-asynchronous PPO (TODO(rl), see `RolloutWorker`): `runtime.num_workers` CPU processes each
-run `runtime.envs_per_worker` envs with their own copy of the current policy and of the
-opponents, and stream `RolloutBatch`es to a single learner process (GPU when available).
+`collect_rollouts` synchronously batches one policy forward pass across several environments.
+The separate `RolloutWorker` process and opponent pool remain future work.
 """
+
+from collections.abc import Sequence
 
 import numpy as np
 import torch
@@ -12,6 +12,74 @@ import torch
 from carla.envs.catan_env import CatanEnv
 from carla.models.base import PolicyNetwork, batch_observations
 from carla.rl.buffer import RolloutBatch
+
+
+@torch.no_grad()
+def collect_rollouts(
+    envs: Sequence[CatanEnv],
+    policy: PolicyNetwork,
+    num_steps: int,
+    observations: Sequence[dict] | None = None,
+    episode_seeds: Sequence[int] | None = None,
+    policy_version: int = 0,
+) -> tuple[list[RolloutBatch], list[dict]]:
+    """Collect `num_steps` decisions per env, retaining independent episode boundaries."""
+    if not envs or num_steps <= 0:
+        raise ValueError("need at least one environment and a positive num_steps")
+    if observations is not None and len(observations) != len(envs):
+        raise ValueError("observations must match environments")
+    if episode_seeds is not None and len(episode_seeds) != len(envs):
+        raise ValueError("episode_seeds must match environments")
+    current = (
+        list(observations)
+        if observations is not None
+        else [
+            env.reset(seed=None if episode_seeds is None else episode_seeds[i])[0]
+            for i, env in enumerate(envs)
+        ]
+    )
+    device = next(policy.parameters()).device
+    policy.eval()
+    n = len(envs)
+    steps: list[list[dict]] = [[] for _ in envs]
+    actions: list[list[np.ndarray]] = [[] for _ in envs]
+    log_probs: list[list[float]] = [[] for _ in envs]
+    values: list[list[float]] = [[] for _ in envs]
+    rewards: list[list[float]] = [[] for _ in envs]
+    dones: list[list[bool]] = [[] for _ in envs]
+    for _ in range(num_steps):
+        batch = batch_observations(current, device=device)
+        out = policy(batch)
+        dist = out.distribution(batch["masks"])
+        heads = dist.sample()
+        head_arrays = heads.cpu().numpy()
+        logp_arrays = dist.log_prob(heads).cpu().numpy()
+        value_arrays = out.value.cpu().numpy()
+        for i, env in enumerate(envs):
+            steps[i].append(current[i])
+            actions[i].append(head_arrays[i])
+            log_probs[i].append(float(logp_arrays[i]))
+            values[i].append(float(value_arrays[i]))
+            obs, reward, terminated, truncated, _ = env.step(head_arrays[i])
+            done = terminated or truncated
+            rewards[i].append(reward)
+            dones[i].append(done)
+            current[i] = env.reset()[0] if done else obs
+    last_values = policy(batch_observations(current, device=device)).value.cpu().numpy()
+    batches = [
+        RolloutBatch(
+            observations=_to_numpy(batch_observations(steps[i])),
+            actions=np.stack(actions[i]),
+            log_probs=np.asarray(log_probs[i], dtype=np.float32),
+            values=np.asarray(values[i], dtype=np.float32),
+            rewards=np.asarray(rewards[i], dtype=np.float32),
+            dones=np.asarray(dones[i], dtype=np.float32),
+            last_value=float(last_values[i]),
+            policy_version=policy_version,
+        )
+        for i in range(n)
+    ]
+    return batches, current
 
 
 @torch.no_grad()
@@ -23,43 +91,16 @@ def collect_rollout(
     episode_seed: int | None = None,
     policy_version: int = 0,
 ) -> tuple[RolloutBatch, dict]:
-    """Play `num_steps` learner decisions (resetting on episode end) and return the batch and
-    the observation to continue from. Recurrent state is not handled yet (TODO(rl))."""
-    if obs is None:
-        obs, _ = env.reset(seed=episode_seed)
-    if num_steps <= 0:
-        raise ValueError("num_steps must be positive")
-    device = next(policy.parameters()).device
-    policy.eval()
-    steps: list[dict] = []
-    actions, log_probs, values, rewards, dones = [], [], [], [], []
-    for _ in range(num_steps):
-        batch = batch_observations([obs], device=device)
-        out = policy(batch)
-        dist = out.distribution(batch["masks"])
-        heads = dist.sample()
-        steps.append(obs)
-        actions.append(heads[0].cpu().numpy())
-        log_probs.append(dist.log_prob(heads).item())
-        values.append(out.value.item())
-        obs, reward, terminated, truncated, _ = env.step(heads[0].cpu().numpy())
-        rewards.append(reward)
-        dones.append(terminated or truncated)
-        if terminated or truncated:
-            obs, _ = env.reset()
-    last_value = policy(batch_observations([obs], device=device)).value.item()
-    stacked = batch_observations(steps)
-    batch = RolloutBatch(
-        observations=_to_numpy(stacked),
-        actions=np.stack(actions),
-        log_probs=np.asarray(log_probs, dtype=np.float32),
-        values=np.asarray(values, dtype=np.float32),
-        rewards=np.asarray(rewards, dtype=np.float32),
-        dones=np.asarray(dones, dtype=np.float32),
-        last_value=last_value,
+    """Single-environment compatibility wrapper around `collect_rollouts`."""
+    batches, observations = collect_rollouts(
+        [env],
+        policy,
+        num_steps,
+        observations=None if obs is None else [obs],
+        episode_seeds=None if episode_seed is None else [episode_seed],
         policy_version=policy_version,
     )
-    return batch, obs
+    return batches[0], observations[0]
 
 
 def _to_numpy(tree: dict) -> dict:

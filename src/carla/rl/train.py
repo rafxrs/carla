@@ -1,4 +1,4 @@
-"""Single-environment MLP PPO baseline with update-boundary resume."""
+"""Synchronous batched-environment MLP PPO with update-boundary resume."""
 
 import logging
 from pathlib import Path
@@ -12,7 +12,7 @@ from carla.envs.catan_env import CatanEnv
 from carla.models.factory import build_policy
 from carla.rl.checkpoint import load_checkpoint, save_checkpoint
 from carla.rl.ppo import PPOLearner
-from carla.rl.rollout import collect_rollout
+from carla.rl.rollout import collect_rollouts
 from carla.utils.runs import create_run_dir
 from carla.utils.seeding import derive_seed, seed_everything
 
@@ -32,8 +32,8 @@ def _validate(config: ExperimentConfig) -> None:
         raise ValueError(
             "this baseline does not support attention or variable-length trade decoding"
         )
-    if config.runtime.num_workers != 1 or config.runtime.envs_per_worker != 1:
-        raise ValueError("synchronous PPO requires one worker and one environment")
+    if config.runtime.num_workers != 1 or config.runtime.envs_per_worker <= 0:
+        raise ValueError("synchronous PPO requires one worker and at least one environment")
     if len(config.opponents.pool) != 1 or config.opponents.pool[0].kind not in (
         "random",
         "heuristic",
@@ -56,8 +56,11 @@ def train(config: ExperimentConfig, resume: Path | None = None) -> Path:
     policy = build_policy(config.model)
     learner = PPOLearner(policy, config.ppo, str(device))
     opponent_kind = config.opponents.pool[0].kind
-    env = CatanEnv(config.engine, config.env, [make_agent(opponent_kind) for _ in range(3)])
-    obs = None
+    envs = [
+        CatanEnv(config.engine, config.env, [make_agent(opponent_kind) for _ in range(3)])
+        for _ in range(config.runtime.envs_per_worker)
+    ]
+    observations = None
     env_steps = 0
     if resume is not None:
         meta = load_checkpoint(resume, policy, learner.optimizer, restore_rng=True)
@@ -74,11 +77,31 @@ def train(config: ExperimentConfig, resume: Path | None = None) -> Path:
         state = meta["training_state"]
         if state is None:
             raise ValueError("checkpoint has no environment state; cannot resume this training run")
-        env, obs = state["env"], state["obs"]
+        if "envs" in state:
+            envs, observations = state["envs"], state["observations"]
+        elif config.runtime.envs_per_worker == 1:
+            envs, observations = [state["env"]], [state["obs"]]
+        else:
+            raise ValueError(
+                "single-environment checkpoint cannot resume with multiple environments"
+            )
+        if len(envs) != config.runtime.envs_per_worker or len(observations) != len(envs):
+            raise ValueError("resume environment count does not match runtime.envs_per_worker")
         env_steps = int(meta["counters"]["env_steps"])
         learner.version = int(meta["counters"]["updates"])
         save_config(config, run_dir / "config.yaml")
         log.info("resumed update %d at %d learner decisions", learner.version, env_steps)
+    else:
+        observations = [
+            env.reset(
+                seed=(
+                    derive_seed(config.seed, "worker", 0)
+                    if i == 0
+                    else derive_seed(config.seed, "worker", 0, "env", i)
+                )
+            )[0]
+            for i, env in enumerate(envs)
+        ]
 
     def checkpoint() -> None:
         save_checkpoint(
@@ -86,23 +109,25 @@ def train(config: ExperimentConfig, resume: Path | None = None) -> Path:
             policy,
             optimizer=learner.optimizer,
             config=config,
-            training_state={"env": env, "obs": obs},
+            training_state={"envs": envs, "observations": observations},
             env_steps=env_steps,
             updates=learner.version,
         )
 
     while env_steps < config.ppo.total_env_steps:
-        steps = min(config.ppo.rollout_steps, config.ppo.total_env_steps - env_steps)
-        batch, obs = collect_rollout(
-            env,
+        remaining = config.ppo.total_env_steps - env_steps
+        active = min(len(envs), remaining)
+        steps = min(config.ppo.rollout_steps, remaining // active)
+        batches, next_observations = collect_rollouts(
+            envs[:active],
             policy,
             steps,
-            obs=obs,
-            episode_seed=derive_seed(config.seed, "worker", 0),
+            observations=observations[:active],
             policy_version=learner.version,
         )
-        stats = learner.update([batch])
-        env_steps += len(batch)
+        observations[:active] = next_observations
+        stats = learner.update(batches)
+        env_steps += sum(map(len, batches))
         if (
             learner.version % config.runtime.log_every == 0
             or env_steps == config.ppo.total_env_steps
@@ -112,7 +137,7 @@ def train(config: ExperimentConfig, resume: Path | None = None) -> Path:
                 learner.version,
                 env_steps,
                 config.ppo.total_env_steps,
-                int(batch.dones.sum()),
+                sum(int(batch.dones.sum()) for batch in batches),
                 stats["policy_loss"],
                 stats["value_loss"],
                 stats["entropy"],
@@ -123,5 +148,6 @@ def train(config: ExperimentConfig, resume: Path | None = None) -> Path:
             or env_steps == config.ppo.total_env_steps
         ):
             checkpoint()
-    env.close()
+    for env in envs:
+        env.close()
     return run_dir

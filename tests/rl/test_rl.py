@@ -77,6 +77,46 @@ def test_ppo_update_changes_finite_weights_and_rejects_stale_batch():
         learner.update([batch])
 
 
+def test_batched_rollouts_use_one_forward_pass_per_step_and_keep_envs_separate(monkeypatch):
+    torch = pytest.importorskip("torch")
+    from carla.config import ModelConfig, PPOConfig
+    from carla.engine.config import EngineConfig
+    from carla.envs import CatanEnv
+    from carla.models import build_policy
+    from carla.rl.ppo import PPOLearner
+    from carla.rl.rollout import collect_rollouts
+
+    torch.manual_seed(3)
+    policy = build_policy(ModelConfig(hidden_dim=16, mlp_layers=1))
+    learner = PPOLearner(policy, PPOConfig(epochs=1, minibatch_size=16))
+    envs = [CatanEnv(EngineConfig(max_turns=2)) for _ in range(3)]
+    sizes = []
+    forward = policy.forward
+
+    def counted(obs, state=None):
+        sizes.append(len(obs["globals"]))
+        return forward(obs, state)
+
+    monkeypatch.setattr(policy, "forward", counted)
+    batches, observations = collect_rollouts(
+        envs, policy, 24, episode_seeds=[3, 4, 5], policy_version=learner.version
+    )
+    assert sizes == [3] * 25  # 24 action selections and one bootstrap evaluation
+    assert len(batches) == len(observations) == 3
+    assert all(len(batch) == 24 and batch.policy_version == 0 for batch in batches)
+    assert sum(int(batch.dones.sum()) for batch in batches) >= 1
+    for batch in batches:
+        masks = batch.observations["masks"]["type"]
+        assert all(masks[t, batch.actions[t, 0]] for t in range(len(batch)))
+    stats = learner.update(batches)
+    assert all(np.isfinite(value) for value in stats.values())
+    assert learner.version == 1
+    more, _ = collect_rollouts(envs, policy, 2, observations, policy_version=learner.version)
+    assert len(more) == 3 and all(len(batch) == 2 for batch in more)
+    with pytest.raises(ValueError, match="observations must match"):
+        collect_rollouts(envs, policy, 1, observations[:1])
+
+
 def test_masked_entropy_has_finite_gradients():
     torch = pytest.importorskip("torch")
     from carla.config import ModelConfig
