@@ -83,11 +83,134 @@ def test_tournament_reports_all_trade_metrics(tmp_path, capsys):
     assert "counter feasibility" in report
 
 
-def test_train_dry_run(tmp_path):
-    pytest.importorskip("torch")
-    assert main(["train", "configs/smoke.yaml", f"runtime.output_dir={tmp_path}"]) == 0
+def test_train_resume_and_evaluate(tmp_path, capsys):
+    torch = pytest.importorskip("torch")
+    overrides = [
+        "ppo.epochs=1",
+        "ppo.rollout_steps=8",
+        "model.hidden_dim=16",
+        "model.mlp_layers=1",
+        "engine.max_turns=12",
+        f"runtime.output_dir={tmp_path}",
+    ]
+    assert main(["train", "configs/smoke.yaml", "ppo.total_env_steps=8", *overrides]) == 0
     (run,) = tmp_path.iterdir()
-    assert {p.name for p in run.iterdir()} == {"config.yaml", "git.txt", "checkpoint_0.pt"}
+    checkpoint = run / "latest.pt"
+    assert {p.name for p in run.iterdir()} == {"config.yaml", "git.txt", "latest.pt"}
+    first = torch.load(checkpoint, weights_only=False)
+    assert first["counters"] == {"env_steps": 8, "updates": 1}
+    assert first["optimizer"]["state"]
+    assert all(torch.isfinite(value).all() for value in first["policy"].values())
+    assert main(["evaluate", str(checkpoint), "--opponent", "random", "--boards", "1"]) == 0
+    assert "policy vs random:" in capsys.readouterr().out
+    assert (
+        main(
+            [
+                "train",
+                "configs/smoke.yaml",
+                "--resume",
+                str(checkpoint),
+                "ppo.total_env_steps=16",
+                *overrides,
+            ]
+        )
+        == 0
+    )
+    second = torch.load(checkpoint, weights_only=False)
+    assert second["counters"] == {"env_steps": 16, "updates": 2}
+    assert "total_env_steps: 16" in (run / "config.yaml").read_text(encoding="utf-8")
+    uninterrupted = tmp_path / "uninterrupted"
+    assert (
+        main(
+            [
+                "train",
+                "configs/smoke.yaml",
+                "ppo.total_env_steps=16",
+                *overrides[:-1],
+                f"runtime.output_dir={uninterrupted}",
+            ]
+        )
+        == 0
+    )
+    (reference_run,) = uninterrupted.iterdir()
+    reference = torch.load(reference_run / "latest.pt", weights_only=False)
+    assert all(
+        torch.equal(value, reference["policy"][name]) for name, value in second["policy"].items()
+    )
+
+
+def test_batched_training_exact_budget_and_resume(tmp_path):
+    torch = pytest.importorskip("torch")
+    overrides = [
+        "runtime.envs_per_worker=3",
+        "ppo.rollout_steps=2",
+        "ppo.epochs=1",
+        "model.hidden_dim=16",
+        "model.mlp_layers=1",
+        "engine.max_turns=12",
+        f"runtime.output_dir={tmp_path}",
+    ]
+    assert main(["train", "configs/smoke.yaml", "ppo.total_env_steps=12", *overrides]) == 0
+    (run,) = tmp_path.iterdir()
+    checkpoint = run / "latest.pt"
+    first = torch.load(checkpoint, weights_only=False)
+    assert first["counters"] == {"env_steps": 12, "updates": 2}
+    assert len(first["training_state"]["envs"]) == 3
+    assert len(first["training_state"]["observations"]) == 3
+    assert (
+        main(
+            [
+                "train",
+                "configs/smoke.yaml",
+                "--resume",
+                str(checkpoint),
+                "ppo.total_env_steps=24",
+                *overrides,
+            ]
+        )
+        == 0
+    )
+    resumed = torch.load(checkpoint, weights_only=False)
+    assert resumed["counters"] == {"env_steps": 24, "updates": 4}
+    reference_dir = tmp_path / "reference"
+    assert (
+        main(
+            [
+                "train",
+                "configs/smoke.yaml",
+                "ppo.total_env_steps=24",
+                *overrides[:-1],
+                f"runtime.output_dir={reference_dir}",
+            ]
+        )
+        == 0
+    )
+    (reference_run,) = reference_dir.iterdir()
+    reference = torch.load(reference_run / "latest.pt", weights_only=False)
+    assert all(
+        torch.equal(value, reference["policy"][name]) for name, value in resumed["policy"].items()
+    )
+    remainder_dir = tmp_path / "remainder"
+    assert (
+        main(
+            [
+                "train",
+                "configs/smoke.yaml",
+                "ppo.total_env_steps=14",
+                *overrides[:-1],
+                f"runtime.output_dir={remainder_dir}",
+            ]
+        )
+        == 0
+    )
+    (remainder_run,) = remainder_dir.iterdir()
+    remainder = torch.load(remainder_run / "latest.pt", weights_only=False)
+    assert remainder["counters"] == {"env_steps": 14, "updates": 3}
+
+
+def test_train_rejects_unknown_option():
+    with pytest.raises(SystemExit, match="2"):
+        main(["train", "configs/smoke.yaml", "--not-an-option"])
 
 
 @pytest.fixture
