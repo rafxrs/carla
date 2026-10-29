@@ -95,7 +95,16 @@ def main(argv: list[str] | None = None) -> int:
         help="dotted config overrides, e.g. engine.vp_to_win=8",
     )
 
-    args = parser.parse_args(argv)
+    # argparse on Python 3.11 leaves positional overrides after --resume unparsed.
+    # Accept only KEY=VALUE tokens there; retain normal errors for unknown options.
+    args, extra = parser.parse_known_args(argv)
+    if extra:
+        if args.command == "train" and all(
+            "=" in item and not item.startswith("-") for item in extra
+        ):
+            args.overrides.extend(extra)
+        else:
+            parser.error(f"unrecognized arguments: {' '.join(extra)}")
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     return {
         "simulate": _simulate,

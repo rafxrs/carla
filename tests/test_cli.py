@@ -208,6 +208,11 @@ def test_batched_training_exact_budget_and_resume(tmp_path):
     assert remainder["counters"] == {"env_steps": 14, "updates": 3}
 
 
+def test_train_rejects_unknown_option():
+    with pytest.raises(SystemExit, match="2"):
+        main(["train", "configs/smoke.yaml", "--not-an-option"])
+
+
 @pytest.fixture
 def gui_calls(monkeypatch):
     import carla.gui.app
