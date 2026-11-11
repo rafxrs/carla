@@ -35,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--workers", type=int)
     p.add_argument("--records", type=Path, help="save every game record here")
 
-    p = commands.add_parser("train", help="train the synchronous MLP PPO baseline")
+    p = commands.add_parser("train", help="train a synchronous MLP/GNN PPO baseline")
     p.add_argument("config", type=Path)
     p.add_argument("--resume", type=Path, help="resume from a training checkpoint")
     p.add_argument("overrides", nargs="*", help="dotted overrides, e.g. ppo.learning_rate=1e-4")

@@ -97,10 +97,12 @@ def test_mlp_policy_runs_on_env_observations():
 
 def test_unimplemented_variants_fail_loudly():
     for cfg in (
-        ModelConfig(encoder="gnn"),
         ModelConfig(belief="gru"),
         ModelConfig(set_attention=True),
         ModelConfig(trade_decoder="gru"),
+        ModelConfig(encoder="gnn", belief="gru"),
+        ModelConfig(encoder="gnn", set_attention=True),
+        ModelConfig(encoder="gnn", trade_decoder="gru"),
     ):
         with pytest.raises(NotImplementedError):
             build_policy(cfg)

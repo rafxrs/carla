@@ -1,0 +1,25 @@
+# Tiny synchronous GNN PPO run: 128 learner decisions, two updates, one environment.
+extends: experiments/gnn.yaml
+name: gnn_smoke
+engine:
+  max_turns: 60
+model:
+  hidden_dim: 64
+ppo:
+  total_env_steps: 128
+  rollout_steps: 64
+  minibatch_size: 64
+  epochs: 1
+opponents:
+  pool:
+    - kind: random
+runtime:
+  num_workers: 1
+  envs_per_worker: 1
+  device: cpu
+  output_dir: runs/gnn_smoke
+  checkpoint_every: 1
+  log_every: 1
+eval:
+  num_games: 4
+  seeds: [0]

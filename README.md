@@ -1,7 +1,7 @@
 # CARLA - Catan Advanced Reinforcement Learning Agent
 
 A powerful Deep RL catan agent.
-CARLA is a four-player Settlers of Catan reinforcement-learning project built on its own deterministic rules engine. A synchronous MLP PPO baseline trains against fixed bots; self-play is planned.
+CARLA is a four-player Settlers of Catan reinforcement-learning project built on its own deterministic rules engine. Synchronous MLP and GNN PPO baselines train against fixed bots; self-play is planned.
 
 ## Status
 
@@ -12,8 +12,8 @@ CARLA is a four-player Settlers of Catan reinforcement-learning project built on
 | `envs/`   | RL         | Factored action heads and masks, including one-for-one offers, public trade context, rewards, self-play env, Gymnasium env. |
 | `agents/` | eval/bots  | Random and heuristic bots, including domestic proposals and counteroffers when enabled. |
 | `eval/`   | eval/bots  | Seeded tournaments with seat rotation and Wilson CIs, multi-process. Recorded games support trade feasibility, acceptance, and execution metrics. Plots: TODO. |
-| `models/` | models     | Masked factored distribution and MLP baseline handle one-for-one offers. GNN, set attention, belief module, and variable-length trade decoder remain TODOs. |
-| `rl/`     | RL         | Synchronous MLP PPO with batched policy inference across environments, resumable checkpoints, and fixed-bot evaluation. Parallel workers and self-play opponent pools remain TODOs. |
+| `models/` | models     | Masked factored distribution, MLP baseline, and board GNN with spatial pointer heads handle one-for-one offers. Set attention, belief module, and variable-length trade decoder remain TODOs. |
+| `rl/`     | RL         | Synchronous MLP/GNN PPO with batched policy inference across environments, resumable checkpoints, and fixed-bot evaluation. Parallel workers and self-play opponent pools remain TODOs. |
 | `gui/`    | GUI        | Arcade play, watch, and replay modes. Click resource cards to build a trade, then send it to the bank or the other players; offers, answers and counteroffers show their cards. Player trading is on unless `--no-trading`. |
 
 The domestic trade protocol, defaults, and extension points are documented in
@@ -44,6 +44,7 @@ carla replay runs/games/game_0000.json.gz --step 120   # position after line #12
 carla tournament --config configs/bots.yaml            # win rates with 95% CIs
 carla config configs/experiments/gnn.yaml model.belief=gru   # print a resolved config
 carla train configs/smoke.yaml       # short end-to-end PPO run
+carla train configs/gnn_smoke.yaml   # 128-decision GNN PPO check
 carla train configs/experiments/ppo_mlp_baseline.yaml
 carla train configs/experiments/ppo_mlp_baseline.yaml --resume runs/<run>/latest.pt ppo.total_env_steps=200000
 carla evaluate runs/<run>/latest.pt --opponent heuristic --boards 50 --seed 10000
@@ -103,7 +104,7 @@ Three contracts connect the workstreams:
 2. **Action masks**: `envs/action_space.py` documents the heads and the mask table.
 3. **Policy output**: `models/base.py` defines `PolicyOutput`, and `FactoredDistribution` samples it, scores log-probs and computes the exact entropy.
 
-Current training batches one MLP policy over several Gymnasium environments in one process and performs on-policy PPO updates. See [docs/ppo_mlp_baseline.md](docs/ppo_mlp_baseline.md) for the supported settings and checkpoint/evaluation protocol. The planned semi-asynchronous self-play design is:
+Current training batches one MLP or GNN policy over several Gymnasium environments in one process and performs on-policy PPO updates. See [docs/ppo_mlp_baseline.md](docs/ppo_mlp_baseline.md) for the supported settings and checkpoint/evaluation protocol, and [docs/ppo_gnn_baseline.md](docs/ppo_gnn_baseline.md) for the graph architecture, symmetry limits, and GNN smoke commands. The planned semi-asynchronous self-play design is:
 
 ```mermaid
 flowchart LR

@@ -1,4 +1,4 @@
-"""Evaluate a saved MLP policy on held-out games against fixed bots."""
+"""Evaluate a saved MLP/GNN policy on held-out games against fixed bots."""
 
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -43,8 +43,8 @@ def evaluate_checkpoint(
     if data.get("config") is None:
         raise ValueError("checkpoint has no experiment config")
     config = from_dict(ExperimentConfig, data["config"])
-    if config.model.encoder != "mlp" or config.model.belief != "none":
-        raise ValueError("this evaluator supports the MLP baseline only")
+    if config.model.encoder not in ("mlp", "gnn") or config.model.belief != "none":
+        raise ValueError("this evaluator supports feed-forward MLP/GNN policies without belief")
     policy = build_policy(config.model)
     load_checkpoint(checkpoint, policy)
     policy.eval()
