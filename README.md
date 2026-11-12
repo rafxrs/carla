@@ -11,13 +11,16 @@ CARLA is a four-player Settlers of Catan reinforcement-learning project built on
 | `config/` | shared     | Typed dataclasses, YAML `extends`, dotted overrides, strict validation.                                                                                                                                                                                                                                 |
 | `envs/`   | RL         | Factored action heads and masks, including one-for-one offers, public trade context, rewards, self-play env, Gymnasium env. |
 | `agents/` | eval/bots  | Random and heuristic bots, including domestic proposals and counteroffers when enabled. |
-| `eval/`   | eval/bots  | Seeded tournaments with seat rotation and Wilson CIs, multi-process. Recorded games support trade feasibility, acceptance, and execution metrics. Plots: TODO. |
+| `eval/`   | eval/bots  | Seeded tournaments with seat rotation and Wilson CIs, multi-process. Trade metrics, experiment CSV summaries, and learning/diagnostic plots. |
 | `models/` | models     | Masked factored distribution and MLP baseline handle one-for-one offers. GNN, set attention, belief module, and variable-length trade decoder remain TODOs. |
-| `rl/`     | RL         | Synchronous MLP PPO with batched policy inference across environments, resumable checkpoints, and fixed-bot evaluation. Parallel workers and self-play opponent pools remain TODOs. |
+| `rl/`     | RL         | Synchronous MLP PPO with batched inference, resumable CSV logging/checkpoints, periodic fixed-bot validation, and multi-seed sweeps. Parallel workers and self-play opponent pools remain TODOs. |
 | `gui/`    | GUI        | Arcade play, watch, and replay modes. Click resource cards to build a trade, then send it to the bank or the other players; offers, answers and counteroffers show their cards. Player trading is on unless `--no-trading`. |
 
 The domestic trade protocol, defaults, and extension points are documented in
 [docs/domestic_trading.md](docs/domestic_trading.md).
+
+Training metrics, periodic validation, lambda/rollout sweeps, and analysis commands are
+documented in [docs/experiments.md](docs/experiments.md).
 
 ## Setup
 

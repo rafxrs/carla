@@ -12,6 +12,7 @@ import torch
 from carla.envs.catan_env import CatanEnv
 from carla.models.base import PolicyNetwork, batch_observations
 from carla.rl.buffer import RolloutBatch
+from carla.rl.metrics import EpisodeTracker, RolloutDiagnostics
 
 
 @torch.no_grad()
@@ -22,6 +23,11 @@ def collect_rollouts(
     observations: Sequence[dict] | None = None,
     episode_seeds: Sequence[int] | None = None,
     policy_version: int = 0,
+    *,
+    trackers: Sequence[EpisodeTracker] | None = None,
+    episode_records: list[dict] | None = None,
+    diagnostics: RolloutDiagnostics | None = None,
+    env_steps: int = 0,
 ) -> tuple[list[RolloutBatch], list[dict]]:
     """Collect `num_steps` decisions per env, retaining independent episode boundaries."""
     if not envs or num_steps <= 0:
@@ -30,6 +36,8 @@ def collect_rollouts(
         raise ValueError("observations must match environments")
     if episode_seeds is not None and len(episode_seeds) != len(envs):
         raise ValueError("episode_seeds must match environments")
+    if trackers is not None and len(trackers) != len(envs):
+        raise ValueError("trackers must match environments")
     current = (
         list(observations)
         if observations is not None
@@ -47,11 +55,13 @@ def collect_rollouts(
     values: list[list[float]] = [[] for _ in envs]
     rewards: list[list[float]] = [[] for _ in envs]
     dones: list[list[bool]] = [[] for _ in envs]
-    for _ in range(num_steps):
+    for step in range(num_steps):
         batch = batch_observations(current, device=device)
         out = policy(batch)
         dist = out.distribution(batch["masks"])
         heads = dist.sample()
+        if diagnostics is not None:
+            diagnostics.observe(dist, batch, heads)
         head_arrays = heads.cpu().numpy()
         logp_arrays = dist.log_prob(heads).cpu().numpy()
         value_arrays = out.value.cpu().numpy()
@@ -62,6 +72,10 @@ def collect_rollouts(
             values[i].append(float(value_arrays[i]))
             obs, reward, terminated, truncated, _ = env.step(head_arrays[i])
             done = terminated or truncated
+            if trackers is not None:
+                record = trackers[i].step(reward, env, done, i, env_steps + step * n + i + 1)
+                if record is not None and episode_records is not None:
+                    episode_records.append(record)
             rewards[i].append(reward)
             dones[i].append(done)
             current[i] = env.reset()[0] if done else obs

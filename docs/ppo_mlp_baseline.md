@@ -1,5 +1,8 @@
 # Synchronous MLP PPO baseline
 
+For CSV metrics, periodic validation, retained checkpoints, multi-seed lambda/rollout sweeps,
+resume recovery, and reproducible plots, see [experiments.md](experiments.md).
+
 This is the first trainable control condition. `carla train` collects learner decisions from `runtime.envs_per_worker` independent `CatanEnv` instances and updates a feed-forward MLP with clipped PPO. One policy forward pass selects an action for every environment at each rollout step. Each game has one learner and three fixed bots of the same configured kind (`random` or `heuristic`). The learner seat is random each episode by default. The action distribution uses the environment's legal-action masks; the current policy can propose one-for-one domestic trades. Opponents' hidden cards are not policy inputs.
 
 ## Run

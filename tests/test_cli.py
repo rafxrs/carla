@@ -96,7 +96,15 @@ def test_train_resume_and_evaluate(tmp_path, capsys):
     assert main(["train", "configs/smoke.yaml", "ppo.total_env_steps=8", *overrides]) == 0
     (run,) = tmp_path.iterdir()
     checkpoint = run / "latest.pt"
-    assert {p.name for p in run.iterdir()} == {"config.yaml", "git.txt", "latest.pt"}
+    assert {p.name for p in run.iterdir()} == {
+        "config.yaml",
+        "git.txt",
+        "latest.pt",
+        "metadata.json",
+        "updates.csv",
+        "episodes.csv",
+        "evaluation_games.csv",
+    }
     first = torch.load(checkpoint, weights_only=False)
     assert first["counters"] == {"env_steps": 8, "updates": 1}
     assert first["optimizer"]["state"]

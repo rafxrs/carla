@@ -1,11 +1,51 @@
 """Run directories: resolved config + code version saved next to every output."""
 
+import platform
 import subprocess
+import sys
 from datetime import datetime
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from carla.config import config_hash, save_config
 from carla.config.schema import ExperimentConfig
+from carla.utils.logging import write_json
+
+
+def record_session(path: Path, device: str, *, resume: Path | None = None) -> dict:
+    """Append machine/software provenance, including when a run moves to another laptop."""
+    import json
+
+    metadata_path = path / "metadata.json"
+    metadata = (
+        json.loads(metadata_path.read_text(encoding="utf-8"))
+        if metadata_path.exists()
+        else {"schema_version": 1, "sessions": []}
+    )
+    packages = {}
+    for package in ("torch", "numpy", "gymnasium", "matplotlib"):
+        try:
+            packages[package] = version(package)
+        except PackageNotFoundError:
+            packages[package] = "unavailable"
+    session = {
+        "started": datetime.now().astimezone().isoformat(),
+        "python": sys.version,
+        "platform": platform.platform(),
+        "processor": platform.processor(),
+        "device": device,
+        "packages": packages,
+        "git": _git_version().strip(),
+        "resume": str(resume) if resume else None,
+    }
+    if device.startswith("cuda"):
+        import torch
+
+        session["gpu"] = torch.cuda.get_device_name(torch.device(device))
+    metadata["sessions"].append(session)
+    metadata["status"] = "running"
+    write_json(metadata_path, metadata)
+    return metadata
 
 
 def create_run_dir(config: ExperimentConfig) -> Path:
