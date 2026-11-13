@@ -51,6 +51,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--csv", type=Path, help="append per-game records to a separate evaluation CSV")
     p.add_argument("--split", choices=("validation", "test"), default="test")
 
+    p = commands.add_parser("policy-tournament", help="compare checkpoints on paired boards")
+    p.add_argument("players", nargs=4, help="four checkpoint paths or random/heuristic bots")
+    p.add_argument("--boards", type=int, default=10, help="boards, each played in four rotations")
+    p.add_argument("--seed", type=int, default=20_000)
+    p.add_argument("--sampled", action="store_true", help="sample policy actions")
+    p.add_argument("--csv", type=Path, help="write per-game results")
+
     p = commands.add_parser("config", help="print a fully resolved config")
     p.add_argument("config", type=Path, nargs="?")
     p.add_argument("overrides", nargs="*")
@@ -117,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
         "tournament": _tournament,
         "train": _train,
         "evaluate": _evaluate,
+        "policy-tournament": _policy_tournament,
         "config": _config,
         "gui": _gui,
     }[args.command](args)
@@ -224,6 +232,25 @@ def _evaluate(args) -> int:
         f"({result.win_rate:.3f}, 95% CI [{result.ci_low:.3f}, {result.ci_high:.3f}]); "
         f"mean VP {result.mean_vp:.2f}"
     )
+    return 0
+
+
+def _policy_tournament(args) -> int:
+    from carla.rl.policy_tournament import run_policy_tournament
+
+    result = run_policy_tournament(
+        args.players,
+        boards=args.boards,
+        seed=args.seed,
+        deterministic=not args.sampled,
+        csv_path=args.csv,
+    )
+    for entry in result.entries:
+        print(
+            f"slot {entry.slot} {entry.player}: {entry.wins}/{entry.games} wins "
+            f"({entry.win_rate:.3f}, 95% CI [{entry.ci_low:.3f}, {entry.ci_high:.3f}]); "
+            f"mean VP {entry.mean_vp:.2f}"
+        )
     return 0
 
 

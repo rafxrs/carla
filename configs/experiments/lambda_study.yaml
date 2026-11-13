@@ -1,4 +1,4 @@
-# Validation protocol for the lambda/rollout sweep; final tests use separate board seeds.
+# Validation protocol for gamma/lambda/rollout sweeps; final tests use separate board seeds.
 extends: ppo_mlp_baseline.yaml
 name: lambda_study
 ppo:
@@ -9,3 +9,4 @@ eval:
   opponents: [random, heuristic]
   seed: 10000
   deterministic: true
+  retain_checkpoints: false

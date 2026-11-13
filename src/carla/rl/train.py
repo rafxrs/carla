@@ -22,6 +22,7 @@ from carla.rl.metrics import (
     RolloutDiagnostics,
 )
 from carla.rl.ppo import PPOLearner
+from carla.rl.process_rollouts import SynchronousRolloutPool
 from carla.rl.rollout import collect_rollouts
 from carla.utils.logging import CsvJournal, write_json
 from carla.utils.runs import create_run_dir, record_session
@@ -43,8 +44,8 @@ def _validate(config: ExperimentConfig) -> None:
         raise ValueError(
             "this baseline does not support attention or variable-length trade decoding"
         )
-    if config.runtime.num_workers != 1 or config.runtime.envs_per_worker <= 0:
-        raise ValueError("synchronous PPO requires one worker and at least one environment")
+    if config.runtime.num_workers <= 0 or config.runtime.envs_per_worker <= 0:
+        raise ValueError("synchronous PPO requires positive workers and environments per worker")
     if len(config.opponents.pool) != 1 or config.opponents.pool[0].kind not in (
         "random",
         "heuristic",
@@ -84,17 +85,21 @@ def train(
         run_dir = create_run_dir(config)
     run_dir = Path(run_dir).resolve()
     device = resolve_device(config.runtime.device)
-    log.info("run directory %s (learner device %s)", run_dir, device)
     policy = build_policy(config.model)
     learner = PPOLearner(policy, config.ppo, str(device))
     opponent_kind = config.opponents.pool[0].kind
-    envs = [
-        CatanEnv(config.engine, config.env, [make_agent(opponent_kind) for _ in range(3)])
-        for _ in range(config.runtime.envs_per_worker)
-    ]
+    envs = (
+        [
+            CatanEnv(config.engine, config.env, [make_agent(opponent_kind) for _ in range(3)])
+            for _ in range(config.runtime.envs_per_worker)
+        ]
+        if config.runtime.num_workers == 1
+        else []
+    )
     observations = None
     env_steps = 0
     state = {}
+    saved_workers = None
     if resume is not None:
         meta = load_checkpoint(resume, policy, learner.optimizer, restore_rng=True)
         saved = to_dict(from_dict(ExperimentConfig, meta["config"]))
@@ -107,10 +112,16 @@ def train(
         for key in current["ppo"]:
             if key != "total_env_steps" and saved["ppo"][key] != current["ppo"][key]:
                 raise ValueError(f"resume config mismatch: ppo.{key}")
+        if saved["runtime"]["num_workers"] != current["runtime"]["num_workers"]:
+            raise ValueError("resume config mismatch: runtime.num_workers")
         state = meta["training_state"]
         if state is None:
             raise ValueError("checkpoint has no environment state; cannot resume this training run")
-        if "envs" in state:
+        if config.runtime.num_workers > 1:
+            saved_workers = state.get("worker_states")
+            if saved_workers is None or len(saved_workers) != config.runtime.num_workers:
+                raise ValueError("resume worker count does not match runtime.num_workers")
+        elif "envs" in state:
             envs, observations = state["envs"], state["observations"]
         elif config.runtime.envs_per_worker == 1:
             envs, observations = [state["env"]], [state["obs"]]
@@ -118,14 +129,15 @@ def train(
             raise ValueError(
                 "single-environment checkpoint cannot resume with multiple environments"
             )
-        if len(envs) != config.runtime.envs_per_worker or len(observations) != len(envs):
+        if config.runtime.num_workers == 1 and (
+            len(envs) != config.runtime.envs_per_worker or len(observations) != len(envs)
+        ):
             raise ValueError("resume environment count does not match runtime.envs_per_worker")
         env_steps = int(meta["counters"]["env_steps"])
         learner.version = int(meta["counters"]["updates"])
         if config.ppo.total_env_steps < env_steps:
             raise ValueError("total_env_steps cannot be smaller than the restored decision count")
-        log.info("resumed update %d at %d learner decisions", learner.version, env_steps)
-    else:
+    elif config.runtime.num_workers == 1:
         observations = [
             env.reset(
                 seed=(
@@ -157,6 +169,12 @@ def train(
     last_evaluation = state.get("last_evaluation", -1)
     interval = config.eval.every_env_steps
     next_evaluation = ((env_steps // interval) + 1) * interval if interval else 0
+    pool = None
+    file_log = logging.FileHandler(run_dir / "train.log", encoding="utf-8")
+    file_log.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    previous_log_level = log.level
+    log.setLevel(logging.INFO)
+    log.addHandler(file_log)
 
     def wall_seconds() -> float:
         return previous_wall + time.perf_counter() - started
@@ -171,6 +189,7 @@ def train(
                 "envs": envs,
                 "observations": observations,
                 "trackers": trackers,
+                "worker_states": pool.snapshot() if pool is not None else None,
                 "log_rows": {k: v.rows for k, v in journals.items()},
                 "training_seconds": training_seconds,
                 "evaluation_seconds": evaluation_seconds,
@@ -184,7 +203,9 @@ def train(
 
     def evaluate(target: int) -> None:
         nonlocal evaluation_seconds, last_evaluation
-        checkpoint_name = f"checkpoints/step_{env_steps:012d}.pt"
+        checkpoint_name = (
+            f"checkpoints/step_{env_steps:012d}.pt" if config.eval.retain_checkpoints else ""
+        )
         start = time.perf_counter()
         records = []
         for opponent in config.eval.opponents:
@@ -220,34 +241,45 @@ def train(
                 }
             )
         last_evaluation = env_steps
-        checkpoint(run_dir / checkpoint_name)
-        checkpoint(run_dir / "latest.pt")
+        if config.eval.retain_checkpoints:
+            checkpoint(run_dir / checkpoint_name)
 
     try:
+        log.info("run directory %s (learner device %s)", run_dir, device)
+        if resume is not None:
+            log.info("resumed update %d at %d learner decisions", learner.version, env_steps)
+        if config.runtime.num_workers > 1:
+            pool = SynchronousRolloutPool(config, saved_workers)
         # An untrained evaluation makes the starting performance visible on every curve.
         if interval and last_evaluation < 0:
             evaluate(env_steps)
+            checkpoint(run_dir / "latest.pt")
         while env_steps < config.ppo.total_env_steps:
             remaining = config.ppo.total_env_steps - env_steps
-            active = min(len(envs), remaining)
+            active = min(config.runtime.num_workers * config.runtime.envs_per_worker, remaining)
             steps = min(config.ppo.rollout_steps, remaining // active)
             records = []
             diagnostics = RolloutDiagnostics()
             if device.type == "cuda":
                 torch.cuda.synchronize(device)
             start = time.perf_counter()
-            batches, next_observations = collect_rollouts(
-                envs[:active],
-                policy,
-                steps,
-                observations=observations[:active],
-                policy_version=learner.version,
-                trackers=trackers[:active],
-                episode_records=records,
-                diagnostics=diagnostics,
-                env_steps=env_steps,
-            )
-            observations[:active] = next_observations
+            if pool is not None:
+                batches, records, diagnostics = pool.collect(
+                    policy, learner.version, steps, active, env_steps
+                )
+            else:
+                batches, next_observations = collect_rollouts(
+                    envs[:active],
+                    policy,
+                    steps,
+                    observations=observations[:active],
+                    policy_version=learner.version,
+                    trackers=trackers[:active],
+                    episode_records=records,
+                    diagnostics=diagnostics,
+                    env_steps=env_steps,
+                )
+                observations[:active] = next_observations
             if device.type == "cuda":
                 torch.cuda.synchronize(device)
             collection_seconds = time.perf_counter() - start
@@ -302,17 +334,23 @@ def train(
             ):
                 evaluate(next_evaluation if env_steps >= next_evaluation else env_steps)
                 next_evaluation = ((env_steps // interval) + 1) * interval
-            elif (
+            if (
                 learner.version % config.runtime.checkpoint_every == 0
                 or env_steps == config.ppo.total_env_steps
             ):
                 checkpoint(run_dir / "latest.pt")
         if interval and last_evaluation != env_steps:
             evaluate(env_steps)
+            checkpoint(run_dir / "latest.pt")
         metadata["status"] = "complete"
         metadata["env_steps"] = env_steps
         write_json(run_dir / "metadata.json", metadata)
     finally:
+        if pool is not None:
+            pool.close()
         for env in envs:
             env.close()
+        log.removeHandler(file_log)
+        log.setLevel(previous_log_level)
+        file_log.close()
     return run_dir

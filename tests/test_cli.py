@@ -101,6 +101,7 @@ def test_train_resume_and_evaluate(tmp_path, capsys):
         "git.txt",
         "latest.pt",
         "metadata.json",
+        "train.log",
         "updates.csv",
         "episodes.csv",
         "evaluation_games.csv",

@@ -41,7 +41,7 @@ def load_run(path: Path, include_incomplete: bool = False) -> dict:
     _unique(episodes, ("env_id", "episode_id"), path / "episodes.csv")
     _unique(
         evaluation,
-        ("checkpoint", "split", "opponent", "mode", "eval_seed", "board", "seat"),
+        ("env_steps", "checkpoint", "split", "opponent", "mode", "eval_seed", "board", "seat"),
         path / "evaluation_games.csv",
     )
     steps = [int(row["env_steps"]) for row in updates]
@@ -72,7 +72,7 @@ def load_run(path: Path, include_incomplete: bool = False) -> dict:
     identity = config_hash(canonical)
     label = (
         f"g={config.ppo.gamma:g}, l={config.ppo.gae_lambda:g}, "
-        f"T={config.ppo.rollout_steps}, N={config.runtime.envs_per_worker} [{identity}]"
+        f"T={config.ppo.rollout_steps}, N={config.runtime.num_workers * config.runtime.envs_per_worker} [{identity}]"
     )
     notices = []
     if not complete:
@@ -81,7 +81,11 @@ def load_run(path: Path, include_incomplete: bool = False) -> dict:
         notices.append(
             f"No policy evaluations; optimizer diagnostics cannot rank playing strength: {path}"
         )
-    missing = {r["checkpoint"] for r in evaluation if not (path / r["checkpoint"]).exists()}
+    missing = {
+        r["checkpoint"]
+        for r in evaluation
+        if r["checkpoint"] and not (path / r["checkpoint"]).exists()
+    }
     if missing:
         notices.append(f"{len(missing)} evaluation checkpoints unavailable for replay: {path}")
     return {
@@ -200,7 +204,7 @@ def analyze_runs(
                 "gamma": cfg.ppo.gamma,
                 "lambda": cfg.ppo.gae_lambda,
                 "rollout_steps": cfg.ppo.rollout_steps,
-                "envs": cfg.runtime.envs_per_worker,
+                "envs": cfg.runtime.num_workers * cfg.runtime.envs_per_worker,
                 "env_steps": step,
                 "training_seconds": float(records[0]["training_seconds"]),
                 "wall_seconds": float(records[0]["wall_seconds"]),

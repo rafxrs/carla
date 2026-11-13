@@ -135,6 +135,12 @@ class RolloutDiagnostics:
     sums: dict[str, float] = field(default_factory=dict)
     counts: dict[str, int] = field(default_factory=dict)
 
+    def merge(self, other: "RolloutDiagnostics") -> None:
+        for key, value in other.sums.items():
+            self.sums[key] = self.sums.get(key, 0.0) + value
+        for key, value in other.counts.items():
+            self.counts[key] = self.counts.get(key, 0) + value
+
     def add(self, key: str, values: np.ndarray) -> None:
         self.sums[key] = self.sums.get(key, 0.0) + float(values.sum())
         self.counts[key] = self.counts.get(key, 0) + len(values)

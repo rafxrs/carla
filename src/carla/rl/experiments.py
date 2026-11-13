@@ -1,4 +1,4 @@
-"""Sequential, restartable lambda/rollout sweeps; one training job owns the device."""
+"""Sequential, restartable gamma/lambda/rollout sweeps; one job owns the device."""
 
 import argparse
 import json
@@ -16,6 +16,7 @@ def run_sweep(
     config_path: Path,
     output: Path,
     *,
+    gammas=(0.999,),
     lambdas=(0.95, 0.99, 1.0),
     rollout_steps=(256, 1024),
     seeds=(0, 1, 2),
@@ -26,23 +27,32 @@ def run_sweep(
     output = output.resolve()
     if any(
         not choices or len(set(choices)) != len(choices)
-        for choices in (lambdas, rollout_steps, seeds)
+        for choices in (gammas, lambdas, rollout_steps, seeds)
     ):
         raise ValueError("sweep dimensions must be nonempty and contain no duplicates")
     cases, configs = [], []
-    for lam, steps, seed in product(lambdas, rollout_steps, seeds):
-        cfg = load_config(
-            config_path,
-            [*overrides, f"ppo.gae_lambda={lam}", f"ppo.rollout_steps={steps}", f"seed={seed}"],
-        )
-        _validate(cfg)
-        canonical = to_dict(cfg)
-        canonical["runtime"]["output_dir"] = "<sweep>"
-        case_id = f"lambda-{lam:g}-rollout-{steps}-seed-{seed}-{config_hash(canonical)}"
+    base_gamma = load_config(config_path, overrides).ppo.gamma
+    for gamma, lam, steps, seed in product(gammas, lambdas, rollout_steps, seeds):
         cfg = load_config(
             config_path,
             [
                 *overrides,
+                f"ppo.gamma={gamma}",
+                f"ppo.gae_lambda={lam}",
+                f"ppo.rollout_steps={steps}",
+                f"seed={seed}",
+            ],
+        )
+        _validate(cfg)
+        canonical = to_dict(cfg)
+        canonical["runtime"]["output_dir"] = "<sweep>"
+        gamma_tag = "" if gamma == base_gamma else f"gamma-{gamma:g}-"
+        case_id = f"{gamma_tag}lambda-{lam:g}-rollout-{steps}-seed-{seed}-{config_hash(canonical)}"
+        cfg = load_config(
+            config_path,
+            [
+                *overrides,
+                f"ppo.gamma={gamma}",
                 f"ppo.gae_lambda={lam}",
                 f"ppo.rollout_steps={steps}",
                 f"seed={seed}",
@@ -100,6 +110,7 @@ def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--gammas", type=float, nargs="+", default=[0.999])
     parser.add_argument("--lambdas", type=float, nargs="+", default=[0.95, 0.99, 1.0])
     parser.add_argument("--rollout-steps", type=int, nargs="+", default=[256, 1024])
     parser.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
@@ -111,6 +122,7 @@ def main(argv=None) -> None:
     run_sweep(
         args.config,
         args.output,
+        gammas=args.gammas,
         lambdas=args.lambdas,
         rollout_steps=args.rollout_steps,
         seeds=args.seeds,

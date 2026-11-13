@@ -99,6 +99,8 @@ class EvalConfig:
     seed: int = 10_000
     deterministic: bool = True
     """Greedy actions when True, policy sampling otherwise. Evaluation has its own RNG."""
+    retain_checkpoints: bool = True
+    """Save a full checkpoint at every validation point; latest.pt is always resumable."""
 
 
 @dataclass(frozen=True)

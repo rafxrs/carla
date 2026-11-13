@@ -1,7 +1,8 @@
 """Experience collection.
 
-`collect_rollouts` synchronously batches one policy forward pass across several environments.
-The separate `RolloutWorker` process and opponent pool remain future work.
+`collect_rollouts` batches one policy forward pass across several environments.
+`process_rollouts` runs this collector in synchronous CPU processes. The semi-asynchronous
+self-play `RolloutWorker` and opponent pool remain future work.
 """
 
 from collections.abc import Sequence
@@ -28,6 +29,7 @@ def collect_rollouts(
     episode_records: list[dict] | None = None,
     diagnostics: RolloutDiagnostics | None = None,
     env_steps: int = 0,
+    env_id_offset: int = 0,
 ) -> tuple[list[RolloutBatch], list[dict]]:
     """Collect `num_steps` decisions per env, retaining independent episode boundaries."""
     if not envs or num_steps <= 0:
@@ -73,7 +75,9 @@ def collect_rollouts(
             obs, reward, terminated, truncated, _ = env.step(head_arrays[i])
             done = terminated or truncated
             if trackers is not None:
-                record = trackers[i].step(reward, env, done, i, env_steps + step * n + i + 1)
+                record = trackers[i].step(
+                    reward, env, done, env_id_offset + i, env_steps + step * n + i + 1
+                )
                 if record is not None and episode_records is not None:
                     episode_records.append(record)
             rewards[i].append(reward)
