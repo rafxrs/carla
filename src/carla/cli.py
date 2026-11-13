@@ -35,9 +35,28 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--workers", type=int)
     p.add_argument("--records", type=Path, help="save every game record here")
 
-    p = commands.add_parser("train", help="train a policy (dry run until PPO lands)")
+    p = commands.add_parser("train", help="train the synchronous MLP PPO baseline")
     p.add_argument("config", type=Path)
+    p.add_argument("--resume", type=Path, help="resume from a training checkpoint")
     p.add_argument("overrides", nargs="*", help="dotted overrides, e.g. ppo.learning_rate=1e-4")
+
+    p = commands.add_parser("evaluate", help="evaluate a checkpoint with seat rotation")
+    p.add_argument("checkpoint", type=Path)
+    p.add_argument("--opponent", choices=("random", "heuristic"), default="heuristic")
+    p.add_argument("--boards", type=int, default=10, help="held-out boards, each played in 4 seats")
+    p.add_argument("--seed", type=int, default=10_000)
+
+    # Final test exports stay separate from the training journals and their recovery counts.
+    p.add_argument("--sampled", action="store_true", help="sample actions instead of greedy play")
+    p.add_argument("--csv", type=Path, help="append per-game records to a separate evaluation CSV")
+    p.add_argument("--split", choices=("validation", "test"), default="test")
+
+    p = commands.add_parser("policy-tournament", help="compare checkpoints on paired boards")
+    p.add_argument("players", nargs=4, help="four checkpoint paths or random/heuristic bots")
+    p.add_argument("--boards", type=int, default=10, help="boards, each played in four rotations")
+    p.add_argument("--seed", type=int, default=20_000)
+    p.add_argument("--sampled", action="store_true", help="sample policy actions")
+    p.add_argument("--csv", type=Path, help="write per-game results")
 
     p = commands.add_parser("config", help="print a fully resolved config")
     p.add_argument("config", type=Path, nargs="?")
@@ -88,13 +107,24 @@ def main(argv: list[str] | None = None) -> int:
         help="dotted config overrides, e.g. engine.vp_to_win=8",
     )
 
-    args = parser.parse_args(argv)
+    # argparse on Python 3.11 leaves positional overrides after --resume unparsed.
+    # Accept only KEY=VALUE tokens there; retain normal errors for unknown options.
+    args, extra = parser.parse_known_args(argv)
+    if extra:
+        if args.command == "train" and all(
+            "=" in item and not item.startswith("-") for item in extra
+        ):
+            args.overrides.extend(extra)
+        else:
+            parser.error(f"unrecognized arguments: {' '.join(extra)}")
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     return {
         "simulate": _simulate,
         "replay": _replay,
         "tournament": _tournament,
         "train": _train,
+        "evaluate": _evaluate,
+        "policy-tournament": _policy_tournament,
         "config": _config,
         "gui": _gui,
     }[args.command](args)
@@ -179,7 +209,48 @@ def _tournament(args) -> int:
 def _train(args) -> int:
     from carla.rl.train import train
 
-    train(load_config(args.config, args.overrides))
+    train(load_config(args.config, args.overrides), resume=args.resume)
+    return 0
+
+
+def _evaluate(args) -> int:
+    from carla.rl.evaluate import evaluate_checkpoint
+
+    result = evaluate_checkpoint(
+        args.checkpoint,
+        opponent=args.opponent,
+        boards=args.boards,
+        seed=args.seed,
+        deterministic=not args.sampled,
+    )
+    if args.csv is not None:
+        from carla.rl.evaluate import export_evaluation
+
+        export_evaluation(args.checkpoint, result, args.csv, split=args.split)
+    print(
+        f"policy vs {result.opponent}: {result.wins}/{result.games} wins "
+        f"({result.win_rate:.3f}, 95% CI [{result.ci_low:.3f}, {result.ci_high:.3f}]); "
+        f"mean VP {result.mean_vp:.2f}"
+    )
+    return 0
+
+
+def _policy_tournament(args) -> int:
+    from carla.rl.policy_tournament import run_policy_tournament
+
+    result = run_policy_tournament(
+        args.players,
+        boards=args.boards,
+        seed=args.seed,
+        deterministic=not args.sampled,
+        csv_path=args.csv,
+    )
+    for entry in result.entries:
+        print(
+            f"slot {entry.slot} {entry.player}: {entry.wins}/{entry.games} wins "
+            f"({entry.win_rate:.3f}, 95% CI [{entry.ci_low:.3f}, {entry.ci_high:.3f}]); "
+            f"mean VP {entry.mean_vp:.2f}"
+        )
     return 0
 
 

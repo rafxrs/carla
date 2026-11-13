@@ -92,6 +92,15 @@ class EvalConfig:
     confidence: float = 0.95
     num_workers: int = 1
     save_records: bool = False
+    every_env_steps: int = 0
+    """Periodic training evaluation interval (learner decisions); 0 disables it."""
+    boards: int = 10
+    opponents: tuple[str, ...] = ("random", "heuristic")
+    seed: int = 10_000
+    deterministic: bool = True
+    """Greedy actions when True, policy sampling otherwise. Evaluation has its own RNG."""
+    retain_checkpoints: bool = True
+    """Save a full checkpoint at every validation point; latest.pt is always resumable."""
 
 
 @dataclass(frozen=True)
