@@ -89,9 +89,7 @@ def evaluate_checkpoint(
     config = from_dict(ExperimentConfig, data["config"])
 
     if config.model.encoder not in ("mlp", "gnn") or config.model.belief != "none":
-        raise ValueError(
-            "this evaluator supports feed-forward MLP/GNN policies without belief"
-        )
+        raise ValueError("this evaluator supports feed-forward MLP/GNN policies without belief")
 
     # Load checkpoint on CPU, then move the complete policy—including
     # registered GNN topology buffers—to the evaluation device.
