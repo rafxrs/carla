@@ -25,6 +25,7 @@ full run, use the config without these overrides and measure throughput first.
 | `models/trade_decoder.py` | Generate or rescore tokens with legal-prefix masks. |
 | `models/distributions.py` | Join the action-type probability with the offer probability. |
 | `envs/action_space.py` | Turn the saved action vector back into an engine action. |
+| `envs/trade_action_wrapper.py` | Declare decoder actions to Gymnasium clients. |
 | `rl/rollout.py`, `rl/ppo.py` | Store actions and use their scores in PPO. |
 
 All paths in this table are under `src/carla/`. The engine's final legality check is
@@ -72,12 +73,33 @@ its exact entropy for non-trade branches. With the decoder enabled,
 `head_trade_entropy` reports conditional token entropy along sampled offer prefixes,
 not entropy of the unused one-for-one head.
 
-The Gymnasium `MultiDiscrete` action space still describes the eight-head
-subset used by generic random sampling. The trainer and evaluator pass the extended
-policy action through `CatanEnv.step`, which decodes and validates it with the engine.
-External Gymnasium integrations that require `action_space.contains(policy_action)`
-need a dedicated structured-action wrapper. This API limit is explicit rather than
-silently treating multi-card offers as one-for-one actions.
+## Gymnasium action space
+
+Plain `CatanEnv` keeps the eight-head action space for the baseline policy. Wrap it
+when using decoder actions with Gymnasium code that checks `action_space.contains`:
+
+```python
+from carla.config import load_config
+from carla.envs import CatanEnv, TradeActionWrapper
+
+config = load_config("configs/experiments/ppo_mlp_trade_decoder.yaml")
+env = TradeActionWrapper(
+    CatanEnv(config.engine, config.env),
+    max_cards=config.model.max_trade_cards_per_side,
+)
+obs, info = env.reset(seed=0)
+action = env.action_space.sample()  # legal, padded to the decoder's width
+assert env.action_space.contains(action)
+env.step(action)
+```
+
+The wrapper uses a standard fixed-width `MultiDiscrete` space with `-1` for unused
+heads and padding. Set its cap to the policy's model cap; decoder outputs then have
+the declared shape. `contains` checks shape and ranges, while the observation masks
+and engine check whether a choice is legal in the current game. Generic per-head
+Gymnasium sampling masks cannot express those conditional rules, so the wrapper's
+`sample()` draws from the current legal actions instead. External trainers must still
+use CARLA's conditional masks when choosing actions.
 
 ## Training, evaluation, and hardware
 

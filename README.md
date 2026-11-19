@@ -18,6 +18,7 @@ CARLA is a four-player Settlers of Catan reinforcement-learning project built on
 The domestic trade protocol, defaults, and extension points are documented in
 [docs/domestic_trading.md](docs/domestic_trading.md). The neural trade path is documented in
 [docs/trade_decoder.md](docs/trade_decoder.md).
+For Gymnasium clients that check decoder action shapes, use `TradeActionWrapper` as shown there.
 
 Training metrics, periodic validation, gamma/lambda/rollout sweeps, and analysis commands are
 documented in [docs/experiments.md](docs/experiments.md).

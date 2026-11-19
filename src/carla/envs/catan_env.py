@@ -135,7 +135,8 @@ class CatanEnv(gym.Env):
 
     Actions are head indices (`MultiDiscrete` in `HEAD_NAMES` order, unused heads ignored) or
     engine `Action`s; illegal actions raise `IllegalActionError`. `info["legal_actions"]` lists
-    the learner's legal actions and `info["hidden_truth"]` the opponents' cards.
+    the learner's legal actions and `info["hidden_truth"]` the opponents' cards. Use
+    `TradeActionWrapper` to declare decoder actions to Gymnasium clients.
     """
 
     metadata = {"render_modes": ["ansi"]}  # noqa: RUF012 (gymnasium API)

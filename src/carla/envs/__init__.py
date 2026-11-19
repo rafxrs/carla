@@ -11,6 +11,7 @@ from carla.envs.action_space import (
 )
 from carla.envs.catan_env import AECStep, CatanAECEnv, CatanEnv
 from carla.envs.observation import ObservationEncoder
+from carla.envs.trade_action_wrapper import TradeActionWrapper
 
 __all__ = [
     "HEAD_NAMES",
@@ -20,6 +21,7 @@ __all__ = [
     "CatanAECEnv",
     "CatanEnv",
     "ObservationEncoder",
+    "TradeActionWrapper",
     "build_masks",
     "decode_action",
     "encode_action",
