@@ -16,6 +16,7 @@ from carla.envs.observation import (
     TRADE_FEATURES,
 )
 from carla.models.base import PolicyNetwork, PolicyOutput
+from carla.models.trade_decoder import TradeDecoder
 
 FLAT_KEYS = (
     "tiles",
@@ -52,6 +53,11 @@ class MLPPolicy(PolicyNetwork):
             {f"logits_{k}": nn.Linear(width, math.prod(s)) for k, s in MASK_SHAPES.items()}
         )
         self.value = nn.Linear(width, 1)
+        self.trade_decoder = (
+            TradeDecoder(width, config.max_trade_cards_per_side)
+            if config.trade_decoder == "gru"
+            else None
+        )
 
     def forward(self, obs: dict[str, Tensor], state: Tensor | None = None) -> PolicyOutput:
         batch = obs["globals"].shape[0]
@@ -61,4 +67,11 @@ class MLPPolicy(PolicyNetwork):
             k: self.heads[f"logits_{k}"](h).reshape(batch, *shape)
             for k, shape in MASK_SHAPES.items()
         }
-        return PolicyOutput(logits=logits, value=self.value(h).squeeze(1))
+        return PolicyOutput(
+            logits=logits,
+            value=self.value(h).squeeze(1),
+            trade_decoder=self.trade_decoder,
+            trade_context=h if self.trade_decoder is not None else None,
+            trade_hand=obs["own_hand_counts"] if self.trade_decoder is not None else None,
+            trade_limit=obs["trade_card_limit"] if self.trade_decoder is not None else None,
+        )

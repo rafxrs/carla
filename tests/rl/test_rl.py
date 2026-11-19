@@ -140,11 +140,10 @@ def test_masked_entropy_has_finite_gradients():
 @pytest.mark.parametrize(
     ("override", "message"),
     [
-        ("runtime.num_workers=2", "one worker"),
-        ("runtime.envs_per_worker=0", "at least one environment"),
+        ("runtime.envs_per_worker=0", "positive workers and environments"),
         ("model.belief=gru", "without belief"),
         ("model.set_attention=true", "does not support attention"),
-        ("model.trade_decoder=gru", "variable-length trade"),
+        ("model.trade_decoder=transformer", "transformer trade decoding"),
         ("opponents.pool=[{kind: self}]", "one fixed random or heuristic"),
         ("opponents.pool=[{kind: random}, {kind: heuristic}]", "one fixed random or heuristic"),
         ("ppo.total_env_steps=0", "budgets must be positive"),

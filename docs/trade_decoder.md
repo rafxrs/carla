@@ -1,0 +1,84 @@
+# Neural domestic-trade offers
+
+`configs/experiments/ppo_mlp_trade_decoder.yaml` enables domestic trading and sets
+`model.trade_decoder: gru`. The same decoder also attaches to the GNN encoder; the MLP
+configuration is the small, runnable starting point. `model.trade_decoder: none` keeps
+the original one-for-one policy and its checkpoint architecture intact. The Transformer
+setting remains unsupported.
+
+## Rules represented by the policy
+
+An offer contains two five-resource count vectors from the **offer maker's** perspective.
+This applies to an active player's proposal and a responder's counteroffer. Each side
+must have at least one card, no resource type may appear on both sides, the maker must
+hold everything it gives, and each side must respect the engine's configured cap.
+The other player's hidden resource composition is never a policy input or an offer
+legality mask. The engine still validates each submitted offer and checks the responder's
+own hand on acceptance. The active player chooses one accepted offer or counteroffer
+to confirm; only then do cards move.
+
+CATAN does not prescribe CARLA's default three proposal rounds, three completed
+domestic exchanges per turn, or four cards per side. These are configurable experiment
+limits for bounded games. Bank and port trades keep their existing policy heads.
+
+## Action format and probability
+
+The type head chooses `PROPOSE_TRADE`; this action is also used for a counteroffer in
+`TRADE_RESPONSE`. A GRU then emits resource tokens `0..4`, `SWITCH=5`, more resource
+tokens, and `STOP=6`. Resource IDs must be nondecreasing within each side. Therefore
+an offer has exactly one sequence. For example, give two lumber and one wool, receive
+one brick and two ore is `0,0,2,5,1,4,4,6` in the project's resource order.
+
+The decoder masks each next token using the actor's exact integer hand, the sequence
+prefix, and the effective per-side cap. The effective cap is the smaller of the
+engine limit and `model.max_trade_cards_per_side` (default four); if the engine limit
+is unlimited, the model cap still applies. A four-card decoder has at most ten tokens.
+The observation carries exact own-hand counts and the public engine limit separately
+from the normalized hand feature. Older MLP/GNN feature dimensions are unchanged.
+
+Policy actions store the original eight head indices plus padded trade tokens. For a
+non-trade action the token part is all `-1` and contributes no probability. For an
+offer, PPO stores the exact sampled tokens and their total log probability, then
+teacher-forces those tokens at update time. The joint log probability is the type
+head's log probability plus the sum of conditional token log probabilities. The old
+one-for-one trade subhead is removed from the score for decoder offers. This prevents
+duplicate action encodings and keeps PPO ratios valid. The decoder's entropy term is
+a sampled conditional-token regularizer; the baseline factored distribution retains
+its exact entropy for non-trade branches. With the decoder enabled,
+`head_trade_entropy` reports conditional token entropy along sampled offer prefixes,
+not entropy of the unused one-for-one head.
+
+The Gymnasium `MultiDiscrete` action space still documents the legacy eight-head
+subset used by generic random sampling. The trainer and evaluator pass the extended
+policy action through `CatanEnv.step`, which decodes and validates it with the engine.
+External Gymnasium integrations that require `action_space.contains(policy_action)`
+need a dedicated structured-action wrapper. This API limit is explicit rather than
+silently treating multi-card offers as one-for-one actions.
+
+## Training, evaluation, and hardware
+
+The existing batched rollout collector, CPU worker pool, PPO learner, checkpoints,
+fixed-bot evaluation, and checkpoint tournament share the structured action format.
+The rollout arrays include the tokens, so no special-case replay or PPO update code
+is needed. Both MLP and GNN produce a context vector for the same GRU.
+
+Use `runtime.device: cpu` for local tests or `runtime.device: auto`/`cuda` for learner
+optimization on a GPU. Workers still sample and step environments on CPU, and the
+existing worker boundary transfers weights from the learner. The decoder has no
+separate GPU algorithm. Benchmark decisions per second before reserving substantial
+GPU time; sequential token generation may make CPU inference the limiting step.
+
+First compare trading disabled, one-for-one trading, and GRU trading on held-out
+board/dice seeds with seat rotation. Report trade counts, execution rates, decisions
+per game, and win rates. Checkpoint tournament CSVs include `trade_offers` and
+`multi_card_offers` per seat; recorded-game trade metrics still supply execution
+and feasibility rates. The current heuristic generates only one-for-one offers;
+multi-card demonstrations and behavioural-cloning warm starts are follow-up work,
+not prerequisites for using the decoder with PPO.
+
+## Verification
+
+`tests/models/test_trade_decoder.py` covers codec uniqueness, legal sampled offers,
+counteroffer perspective, finite scores/gradients, and a PPO update using saved trade
+tokens. Existing engine tests cover offer limits, hand checks, conservation, replay,
+and negotiation phases. Training smoke runs exercise checkpoint writing and evaluation.

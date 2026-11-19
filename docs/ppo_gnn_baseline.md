@@ -78,11 +78,11 @@ The trainer and evaluator now accept feed-forward `mlp` and `gnn` encoders. The 
 already selected `GNNPolicy`, so it required no dispatch change. PPO math, rollout collection,
 GAE, action masking, checkpoint serialization, and the MLP implementation are unchanged.
 
-The existing trainer supports **one worker with one or more synchronous environments**;
-that behavior is retained, and the GNN smoke config uses one environment. Each game has
-three fixed bots of a single configured kind (`random` or `heuristic`). Belief networks,
-set attention, variable-length trade decoders, self-play pools, and parallel rollout workers
-remain unsupported. Domestic trading remains disabled in the GNN configs.
+The trainer supports one or more synchronous CPU workers, each with one or more
+environments; the GNN smoke config uses one environment. Each game has three fixed
+bots of a single configured kind (`random` or `heuristic`). The optional GRU trade
+decoder also attaches to GNN context; belief networks, set attention, and self-play
+pools remain unsupported. Domestic trading remains disabled in the baseline GNN configs.
 
 `configs/experiments/gnn.yaml` inherits the general base configuration; its inherited worker
 and opponent-pool settings still require overrides for synchronous training. Use

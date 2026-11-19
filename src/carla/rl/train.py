@@ -4,6 +4,7 @@ import logging
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from carla.agents import make_agent
@@ -31,6 +32,16 @@ from carla.utils.seeding import derive_seed, seed_everything
 log = logging.getLogger(__name__)
 
 
+def _upgrade_trade_observation(obs: dict, card_limit: int | None) -> None:
+    """Add actor-only fields to live observations from pre-decoder checkpoints."""
+    if "own_hand_counts" not in obs:
+        obs["own_hand_counts"] = np.rint(obs["hand"] * 10).astype(np.int64)
+    if "trade_card_limit" not in obs:
+        obs["trade_card_limit"] = np.asarray(
+            [-1 if card_limit is None else card_limit], dtype=np.int64
+        )
+
+
 def resolve_device(name: str) -> torch.device:
     if name == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -40,10 +51,10 @@ def resolve_device(name: str) -> torch.device:
 def _validate(config: ExperimentConfig) -> None:
     if config.model.encoder not in ("mlp", "gnn") or config.model.belief != "none":
         raise ValueError("this baseline supports only feed-forward MLP/GNN policies without belief")
-    if config.model.trade_decoder != "none" or config.model.set_attention:
-        raise ValueError(
-            "this baseline does not support attention or variable-length trade decoding"
-        )
+    if config.model.trade_decoder == "transformer" or config.model.set_attention:
+        raise ValueError("this baseline does not support attention or transformer trade decoding")
+    if config.model.max_trade_cards_per_side < 1:
+        raise ValueError("model.max_trade_cards_per_side must be positive")
     if config.runtime.num_workers <= 0 or config.runtime.envs_per_worker <= 0:
         raise ValueError("synchronous PPO requires positive workers and environments per worker")
     if len(config.opponents.pool) != 1 or config.opponents.pool[0].kind not in (
@@ -121,6 +132,9 @@ def train(
             saved_workers = state.get("worker_states")
             if saved_workers is None or len(saved_workers) != config.runtime.num_workers:
                 raise ValueError("resume worker count does not match runtime.num_workers")
+            for worker in saved_workers:
+                for obs in worker["observations"]:
+                    _upgrade_trade_observation(obs, config.engine.max_trade_cards_per_side)
         elif "envs" in state:
             envs, observations = state["envs"], state["observations"]
         elif config.runtime.envs_per_worker == 1:
@@ -133,6 +147,9 @@ def train(
             len(envs) != config.runtime.envs_per_worker or len(observations) != len(envs)
         ):
             raise ValueError("resume environment count does not match runtime.envs_per_worker")
+        if observations is not None:
+            for obs in observations:
+                _upgrade_trade_observation(obs, config.engine.max_trade_cards_per_side)
         env_steps = int(meta["counters"]["env_steps"])
         learner.version = int(meta["counters"]["updates"])
         if config.ppo.total_env_steps < env_steps:

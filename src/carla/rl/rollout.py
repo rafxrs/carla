@@ -62,10 +62,10 @@ def collect_rollouts(
         out = policy(batch)
         dist = out.distribution(batch["masks"])
         heads = dist.sample()
+        logp_arrays = dist.log_prob(heads).cpu().numpy()
         if diagnostics is not None:
             diagnostics.observe(dist, batch, heads)
         head_arrays = heads.cpu().numpy()
-        logp_arrays = dist.log_prob(heads).cpu().numpy()
         value_arrays = out.value.cpu().numpy()
         for i, env in enumerate(envs):
             steps[i].append(current[i])

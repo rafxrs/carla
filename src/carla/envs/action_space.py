@@ -34,6 +34,7 @@ from carla.engine import actions as A
 from carla.engine.actions import NUM_ACTION_TYPES, Action, ActionType
 from carla.engine.constants import NUM_DEV_CARD_TYPES, NUM_PLAYERS, NUM_RESOURCES, DevCard
 from carla.engine.topology import NUM_CORNERS, NUM_EDGES, NUM_TILES
+from carla.envs.trade_tokens import PAD, STOP, tokens_offer
 
 HEAD_SIZES: dict[str, int] = {
     "type": NUM_ACTION_TYPES,
@@ -217,6 +218,11 @@ def decode_action(heads: Sequence[int] | np.ndarray | Mapping[str, int], actor: 
         get = lambda name: values[HEAD_INDEX[name]]  # noqa: E731
     action_type = ActionType(get("type"))
     if action_type == _T.PROPOSE_TRADE:
+        if not isinstance(heads, Mapping) and len(values) > len(HEAD_NAMES):
+            tail = values[len(HEAD_NAMES) :]
+            if STOP not in tail or any(t != PAD for t in tail[tail.index(STOP) + 1 :]):
+                raise ValueError("invalid padded trade tokens")
+            return Action(_T.PROPOSE_TRADE, trade=tokens_offer(tail[: tail.index(STOP) + 1]))
         give, receive = int(get("resource")), int(get("resource2"))
         if not 0 <= give < NUM_RESOURCES or not 0 <= receive < NUM_RESOURCES or give == receive:
             raise ValueError("invalid one-for-one trade heads")

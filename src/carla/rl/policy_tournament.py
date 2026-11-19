@@ -9,7 +9,9 @@ import torch
 from carla.agents import make_agent
 from carla.config.loader import from_dict
 from carla.config.schema import ExperimentConfig
+from carla.engine.actions import ActionType
 from carla.engine.rng import derive_seed
+from carla.envs.action_space import decode_action
 from carla.envs.catan_env import CatanAECEnv
 from carla.eval.metrics import wilson_interval
 from carla.models.base import batch_observations
@@ -29,6 +31,8 @@ TOURNAMENT_FIELDS = (
     "decisions",
     "turns",
     "victory_points",
+    "trade_offers",
+    "multi_card_offers",
 )
 
 
@@ -72,8 +76,8 @@ def run_policy_tournament(
         if data.get("config") is None:
             raise ValueError(f"checkpoint has no experiment config: {path}")
         current = from_dict(ExperimentConfig, data["config"])
-        if current.model.encoder != "mlp" or current.model.belief != "none":
-            raise ValueError("policy tournament currently supports MLP checkpoints only")
+        if current.model.encoder not in ("mlp", "gnn") or current.model.belief != "none":
+            raise ValueError("policy tournament supports feed-forward MLP/GNN checkpoints only")
         if config is not None and (current.engine != config.engine or current.env != config.env):
             raise ValueError("tournament checkpoints must use the same engine and environment")
         config = current
@@ -101,6 +105,7 @@ def run_policy_tournament(
                         )
                         bots[slot] = bot
                 rewards, decisions = [0.0] * 4, [0] * 4
+                trade_offers, multi_card_offers = [0] * 4, [0] * 4
                 while not env.game.is_over:
                     seat = env.actor
                     slot = slots[seat]
@@ -117,6 +122,12 @@ def run_policy_tournament(
                     else:
                         env.observe(seat)  # Clear events for this bot seat.
                         action = bots[slot].act(env.game, seat, env.game.legal_actions())
+                    parsed = action if slot not in policies else decode_action(action, seat)
+                    if parsed.type == ActionType.PROPOSE_TRADE:
+                        assert parsed.trade is not None
+                        trade_offers[slot] += 1
+                        if max(sum(parsed.trade.give), sum(parsed.trade.receive)) > 1:
+                            multi_card_offers[slot] += 1
                     result = env.step(action)
                     for player_slot, player_seat in enumerate(seats):
                         rewards[player_slot] += float(result.rewards[player_seat])
@@ -142,6 +153,8 @@ def run_policy_tournament(
                             "decisions": decisions[slot],
                             "turns": env.game.turn,
                             "victory_points": env.game.victory_points(seat),
+                            "trade_offers": trade_offers[slot],
+                            "multi_card_offers": multi_card_offers[slot],
                         }
                     )
     entries = []

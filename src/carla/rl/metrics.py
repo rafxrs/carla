@@ -8,6 +8,7 @@ import torch
 from carla.engine.actions import ActionType
 from carla.engine.state import Phase
 from carla.envs.action_space import MASK_SHAPES
+from carla.models.distributions import TradeDistribution
 
 HEAD_METRICS = tuple(f"head_{key}_entropy" for key in MASK_SHAPES)
 DIAGNOSTIC_FIELDS = (
@@ -163,6 +164,11 @@ class RolloutDiagnostics:
             for key, value in batch["masks"].items()
         }
         for i, key in enumerate(keys):
+            if key == "trade" and isinstance(dist, TradeDistribution):
+                # The one-for-one head is unused; report entropy along sampled offer prefixes.
+                chosen = heads[:, 0] == ActionType.PROPOSE_TRADE
+                self.add("head_trade_entropy", dist._conditional_entropy[chosen].cpu().numpy())
+                continue
             # Dummy uniform distributions for unavailable heads must not enter the mean.
             self.add(f"head_{key}_entropy", entropies[masks[key].any(1), i])
         main = batch["globals"][:, Phase.MAIN].cpu().numpy().astype(bool)

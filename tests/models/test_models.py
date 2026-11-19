@@ -99,10 +99,10 @@ def test_unimplemented_variants_fail_loudly():
     for cfg in (
         ModelConfig(belief="gru"),
         ModelConfig(set_attention=True),
-        ModelConfig(trade_decoder="gru"),
+        ModelConfig(trade_decoder="transformer"),
         ModelConfig(encoder="gnn", belief="gru"),
         ModelConfig(encoder="gnn", set_attention=True),
-        ModelConfig(encoder="gnn", trade_decoder="gru"),
+        ModelConfig(encoder="gnn", trade_decoder="transformer"),
     ):
         with pytest.raises(NotImplementedError):
             build_policy(cfg)

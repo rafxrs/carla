@@ -38,6 +38,7 @@ class ModelConfig:
     belief_dim: int = 128
     belief_loss_coef: float = 0.1
     trade_decoder: Literal["none", "gru", "transformer"] = "none"
+    max_trade_cards_per_side: int = 4
 
 
 @dataclass(frozen=True)

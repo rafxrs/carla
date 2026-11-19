@@ -7,7 +7,8 @@ import numpy as np
 import torch
 from torch import Tensor, nn
 
-from carla.models.distributions import FactoredDistribution
+from carla.models.distributions import FactoredDistribution, TradeDistribution
+from carla.models.trade_decoder import TradeDecoder
 
 
 @dataclass
@@ -20,8 +21,23 @@ class PolicyOutput:
     """Next recurrent state (belief module), or None for feed-forward models."""
     belief: dict[str, Tensor] | None = None
     """Predicted opponent cards (keys of `CatanAECEnv.hidden_truth`), for the auxiliary loss."""
+    trade_decoder: TradeDecoder | None = None
+    trade_context: Tensor | None = None
+    trade_hand: Tensor | None = None
+    trade_limit: Tensor | None = None
 
-    def distribution(self, masks: dict[str, Tensor]) -> FactoredDistribution:
+    def distribution(self, masks: dict[str, Tensor]) -> FactoredDistribution | TradeDistribution:
+        if self.trade_decoder is not None:
+            assert self.trade_context is not None and self.trade_hand is not None
+            assert self.trade_limit is not None
+            return TradeDistribution(
+                self.logits,
+                masks,
+                self.trade_decoder,
+                self.trade_context,
+                self.trade_hand,
+                self.trade_limit,
+            )
         return FactoredDistribution(self.logits, masks)
 
 

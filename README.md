@@ -1,6 +1,6 @@
 # CARLA - Catan Advanced Reinforcement Learning Agent
 
-CARLA is a four-player Settlers of Catan reinforcement-learning project built on its own deterministic rules engine. A synchronous MLP PPO baseline trains against fixed bots; self-play is planned.
+CARLA is a four-player Settlers of Catan reinforcement-learning project built on its own deterministic rules engine. Synchronous MLP and GNN PPO baselines train against fixed bots; self-play is planned.
 
 ## Status
 
@@ -8,15 +8,16 @@ CARLA is a four-player Settlers of Catan reinforcement-learning project built on
 | --------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `engine/` | engine     | Base rules, maritime trade, and domestic proposals, invitations, counteroffers, confirmation, configurable limits, snapshots, deterministic replay, and logs. Larger offers are validated when submitted. |
 | `config/` | shared     | Typed dataclasses, YAML `extends`, dotted overrides, strict validation.                                                                                                                                                                                                                                 |
-| `envs/`   | RL         | Factored action heads and masks, including one-for-one offers, public trade context, rewards, self-play env, Gymnasium env. |
+| `envs/`   | RL         | Factored action heads and masks, canonical multi-card offer tokens, public trade context, rewards, self-play env, Gymnasium env. |
 | `agents/` | eval/bots  | Random and heuristic bots, including domestic proposals and counteroffers when enabled. |
 | `eval/`   | eval/bots  | Seeded tournaments with seat rotation and Wilson CIs, multi-process. Trade metrics, experiment CSV summaries, and learning/diagnostic plots. |
-| `models/` | models     | Masked factored distribution and MLP baseline handle one-for-one offers. GNN, set attention, belief module, and variable-length trade decoder remain TODOs. |
-| `rl/`     | RL         | Synchronous MLP PPO with batched CPU rollout workers, resumable CSV logging/checkpoints, fixed-bot validation, gamma/lambda sweeps, and checkpoint tournaments. Self-play opponent pools remain TODOs. |
+| `models/` | models     | MLP and board GNN policies, masked action heads, and an optional GRU decoder for multi-card domestic offers. Set attention and belief remain TODOs. |
+| `rl/`     | RL         | Synchronous MLP/GNN PPO with batched CPU rollout workers, resumable CSV logging/checkpoints, fixed-bot validation, gamma/lambda sweeps, and checkpoint tournaments. Self-play opponent pools remain TODOs. |
 | `gui/`    | GUI        | Arcade play, watch, and replay modes. Click resource cards to build a trade, then send it to the bank or the other players; offers, answers and counteroffers show their cards. Player trading is on unless `--no-trading`. |
 
 The domestic trade protocol, defaults, and extension points are documented in
-[docs/domestic_trading.md](docs/domestic_trading.md).
+[docs/domestic_trading.md](docs/domestic_trading.md). The neural trade path is documented in
+[docs/trade_decoder.md](docs/trade_decoder.md).
 
 Training metrics, periodic validation, gamma/lambda/rollout sweeps, and analysis commands are
 documented in [docs/experiments.md](docs/experiments.md).
@@ -104,9 +105,9 @@ Three contracts connect the workstreams:
 
 1. **Observations**: `envs/observation.py` lists the arrays. Seats are relative (0 = the actor), and there are no board coordinates.
 2. **Action masks**: `envs/action_space.py` documents the heads and the mask table.
-3. **Policy output**: `models/base.py` defines `PolicyOutput`, and `FactoredDistribution` samples it, scores log-probs and computes the exact entropy.
+3. **Policy output**: `models/base.py` defines `PolicyOutput`; the factored distribution scores the baseline heads, and the optional trade distribution adds exact offer log-probabilities and sampled token entropy.
 
-Current training batches MLP actions across Gymnasium environments in each CPU rollout process and performs synchronous on-policy PPO updates. See [docs/ppo_mlp_baseline.md](docs/ppo_mlp_baseline.md) for the supported settings and checkpoint/evaluation protocol. The planned semi-asynchronous self-play design is:
+Current training batches MLP or GNN actions across Gymnasium environments in each CPU rollout process and performs synchronous on-policy PPO updates. See [docs/ppo_mlp_baseline.md](docs/ppo_mlp_baseline.md) and [docs/ppo_gnn_baseline.md](docs/ppo_gnn_baseline.md). The planned semi-asynchronous self-play design is:
 
 ```mermaid
 flowchart LR
