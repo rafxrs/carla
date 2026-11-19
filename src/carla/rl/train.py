@@ -38,8 +38,8 @@ def resolve_device(name: str) -> torch.device:
 
 
 def _validate(config: ExperimentConfig) -> None:
-    if config.model.encoder != "mlp" or config.model.belief != "none":
-        raise ValueError("this baseline supports only feed-forward MLP policies without belief")
+    if config.model.encoder not in ("mlp", "gnn") or config.model.belief != "none":
+        raise ValueError("this baseline supports only feed-forward MLP/GNN policies without belief")
     if config.model.trade_decoder != "none" or config.model.set_attention:
         raise ValueError(
             "this baseline does not support attention or variable-length trade decoding"

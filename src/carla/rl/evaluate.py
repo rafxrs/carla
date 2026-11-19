@@ -44,8 +44,8 @@ def evaluate_policy(
     """Each held-out board is played in all four seats; RNG and module modes are restored."""
     if opponent not in ("random", "heuristic") or boards <= 0:
         raise ValueError("evaluation needs random/heuristic opponents and positive boards")
-    if config.model.encoder != "mlp" or config.model.belief != "none":
-        raise ValueError("this evaluator supports the MLP baseline only")
+    if config.model.encoder not in ("mlp", "gnn") or config.model.belief != "none":
+        raise ValueError("this evaluator supports feed-forward MLP/GNN policies only")
     modes = [(module, module.training) for module in policy.modules()]
     device = next(policy.parameters()).device
     records = []

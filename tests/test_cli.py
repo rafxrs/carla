@@ -83,9 +83,12 @@ def test_tournament_reports_all_trade_metrics(tmp_path, capsys):
     assert "counter feasibility" in report
 
 
-def test_train_resume_and_evaluate(tmp_path, capsys):
+@pytest.mark.parametrize("encoder", ["mlp", "gnn"])
+def test_train_resume_and_evaluate(tmp_path, capsys, encoder):
     torch = pytest.importorskip("torch")
     overrides = [
+        f"model.encoder={encoder}",
+        "model.gnn_layers=2",
         "ppo.epochs=1",
         "ppo.rollout_steps=8",
         "model.hidden_dim=16",
