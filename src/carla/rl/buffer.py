@@ -9,8 +9,9 @@ import numpy as np
 class RolloutBatch:
     """T consecutive decisions of one learner seat (episodes may end inside the batch).
 
-    `observations` holds the stacked `ObservationEncoder` arrays (masks included), `actions` the
-    head indices (T, len(HEAD_NAMES)). Rewards are summed between the seat's decisions.
+    `observations` holds the stacked `ObservationEncoder` arrays (masks included). `actions`
+    stores eight head indices per decision, plus padded offer tokens when the trade decoder
+    is enabled. Rewards are summed between the seat's decisions.
     """
 
     observations: dict

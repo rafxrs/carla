@@ -85,7 +85,7 @@ class CatanAECEnv:
         return self.encoder.encode(self.game, seat, events)
 
     def step(self, action: Action | Sequence[int] | np.ndarray) -> AECStep:
-        """Apply `action` (an engine Action or head indices) for the actor."""
+        """Apply an engine Action or policy indices, including offer tokens, for the actor."""
         game = self.game
         if not isinstance(action, Action):
             action = decode_action(action, game.decision_player)

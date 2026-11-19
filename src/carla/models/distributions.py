@@ -101,7 +101,11 @@ class FactoredDistribution:
 
 
 class TradeDistribution(FactoredDistribution):
-    """Existing action heads plus a masked offer sequence for PROPOSE_TRADE."""
+    """Eight action heads plus padded offer tokens when the type is PROPOSE_TRADE.
+
+    The old one-for-one subhead is ignored for offers. Scoring uses the decoder's
+    conditional token probabilities, including for counteroffers.
+    """
 
     def __init__(
         self,
@@ -126,6 +130,9 @@ class TradeDistribution(FactoredDistribution):
         )
         selected = heads[:, 0] == _T.PROPOSE_TRADE
         if selected.any():
+            # Offer terms live in the tokens; clear the unused one-for-one head values.
+            heads[selected, HEAD_INDEX["resource"]] = PAD
+            heads[selected, HEAD_INDEX["resource2"]] = PAD
             sampled, _ = self.decoder.sample(
                 self.context[selected], self.hand[selected], self.limit[selected], deterministic
             )
@@ -159,6 +166,7 @@ class TradeDistribution(FactoredDistribution):
         return total
 
     def entropy(self) -> Tensor:
+        """Exact head entropy plus token entropy along the scored offer prefixes."""
         trade_lp = self.logp["trade"]
         safe = torch.where(torch.isfinite(trade_lp), trade_lp, 0.0)
         old_trade_entropy = -(trade_lp.exp() * safe).sum(1)

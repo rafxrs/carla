@@ -6,6 +6,30 @@ configuration is the small, runnable starting point. `model.trade_decoder: none`
 the original one-for-one policy and its checkpoint architecture intact. The Transformer
 setting remains unsupported.
 
+To check the resolved settings and run one small training update from the repository root:
+
+```bash
+carla config configs/experiments/ppo_mlp_trade_decoder.yaml
+carla train configs/experiments/ppo_mlp_trade_decoder.yaml ppo.total_env_steps=128 ppo.rollout_steps=32 ppo.epochs=1 ppo.minibatch_size=128 model.hidden_dim=32 engine.max_turns=60
+```
+
+This checks the training path, not whether the agent has learned to trade well. For a
+full run, use the config without these overrides and measure throughput first.
+
+## Where to read the code
+
+| File | Responsibility |
+| --- | --- |
+| `envs/trade_tokens.py` | Convert between an offer and its unique token sequence. |
+| `envs/observation.py` | Expose the acting player's exact hand and the engine card limit. |
+| `models/trade_decoder.py` | Generate or rescore tokens with legal-prefix masks. |
+| `models/distributions.py` | Join the action-type probability with the offer probability. |
+| `envs/action_space.py` | Turn the saved action vector back into an engine action. |
+| `rl/rollout.py`, `rl/ppo.py` | Store actions and use their scores in PPO. |
+
+All paths in this table are under `src/carla/`. The engine's final legality check is
+in `engine/rules.py`.
+
 ## Rules represented by the policy
 
 An offer contains two five-resource count vectors from the **offer maker's** perspective.
@@ -48,7 +72,7 @@ its exact entropy for non-trade branches. With the decoder enabled,
 `head_trade_entropy` reports conditional token entropy along sampled offer prefixes,
 not entropy of the unused one-for-one head.
 
-The Gymnasium `MultiDiscrete` action space still documents the legacy eight-head
+The Gymnasium `MultiDiscrete` action space still describes the eight-head
 subset used by generic random sampling. The trainer and evaluator pass the extended
 policy action through `CatanEnv.step`, which decodes and validates it with the engine.
 External Gymnasium integrations that require `action_space.contains(policy_action)`

@@ -22,9 +22,13 @@ class PolicyOutput:
     belief: dict[str, Tensor] | None = None
     """Predicted opponent cards (keys of `CatanAECEnv.hidden_truth`), for the auxiliary loss."""
     trade_decoder: TradeDecoder | None = None
+    """Optional offer generator; the fields below are its actor-only inputs."""
     trade_context: Tensor | None = None
+    """(B, hidden_dim) context from the MLP or GNN encoder."""
     trade_hand: Tensor | None = None
+    """(B, 5) exact counts of the acting player's resources."""
     trade_limit: Tensor | None = None
+    """(B, 1) engine card cap per side; -1 means no engine cap."""
 
     def distribution(self, masks: dict[str, Tensor]) -> FactoredDistribution | TradeDistribution:
         if self.trade_decoder is not None:

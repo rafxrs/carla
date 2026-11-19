@@ -21,8 +21,9 @@ partner         (4,)      player               type == CONFIRM_TRADE
 trade           (5, 5)    resource -> resource2 type == PROPOSE_TRADE (1 card each)
 ==============  ========  ===================  ==========================================
 
-The heads offer one-for-one trades. Larger and mixed offers are accepted by the engine and GUI;
-the planned trade decoder can extend the policy beyond this baseline action subset.
+The eight heads represent one-for-one trades. With the optional trade decoder, a policy
+appends a fixed-width token tail to those heads for multi-card offers. `decode_action`
+accepts both formats; `encode_action` and `sample_heads` use the eight-head subset.
 """
 
 from collections.abc import Iterable, Mapping, Sequence
@@ -210,7 +211,7 @@ def encode_action(action: Action, actor: int) -> np.ndarray:
 
 
 def decode_action(heads: Sequence[int] | np.ndarray | Mapping[str, int], actor: int) -> Action:
-    """Inverse of `encode_action`; heads not used by the chosen type are ignored."""
+    """Decode baseline heads or a decoder offer with a padded token tail."""
     if isinstance(heads, Mapping):
         get = heads.__getitem__
     else:
@@ -219,6 +220,7 @@ def decode_action(heads: Sequence[int] | np.ndarray | Mapping[str, int], actor: 
     action_type = ActionType(get("type"))
     if action_type == _T.PROPOSE_TRADE:
         if not isinstance(heads, Mapping) and len(values) > len(HEAD_NAMES):
+            # STOP terminates the offer; fixed-width rollout storage fills the rest with PAD.
             tail = values[len(HEAD_NAMES) :]
             if STOP not in tail or any(t != PAD for t in tail[tail.index(STOP) + 1 :]):
                 raise ValueError("invalid padded trade tokens")

@@ -39,6 +39,7 @@ class ModelConfig:
     belief_loss_coef: float = 0.1
     trade_decoder: Literal["none", "gru", "transformer"] = "none"
     max_trade_cards_per_side: int = 4
+    """Decoder cap; the engine's offer limit can further restrict it."""
 
 
 @dataclass(frozen=True)

@@ -1,3 +1,5 @@
+from itertools import product
+
 import numpy as np
 import pytest
 import torch
@@ -5,7 +7,7 @@ import torch
 from carla.config.schema import ModelConfig, PPOConfig
 from carla.engine.actions import Action, ActionType, TradeOffer
 from carla.engine.config import EngineConfig
-from carla.envs.action_space import decode_action
+from carla.envs.action_space import HEAD_INDEX, decode_action
 from carla.envs.observation import ObservationEncoder
 from carla.envs.trade_tokens import offer_tokens, tokens_offer
 from carla.models.base import batch_observations
@@ -67,6 +69,8 @@ def test_structured_policy_offer_is_engine_legal_and_hidden_hand_independent():
     batch["masks"]["type"][:, ActionType.PROPOSE_TRADE] = True
     offers = policy(batch).distribution(batch["masks"]).sample()
     assert all(game.is_legal(decode_action(row, 0)) for row in offers.tolist())
+    assert (offers[:, HEAD_INDEX["resource"]] == -1).all()
+    assert (offers[:, HEAD_INDEX["resource2"]] == -1).all()
 
 
 def test_counteroffer_uses_responder_hand_and_perspective():
@@ -142,6 +146,24 @@ def test_one_card_decoder_probability_sums_to_one():
     for row, (g, r) in enumerate((g, r) for g in range(5) for r in range(5) if g != r):
         actions[row, 8:] = torch.tensor((g, 5, r, 6))
     scores = policy(batch).distribution(batch["masks"]).log_prob(actions)
+    assert torch.logsumexp(scores, 0).item() == pytest.approx(0.0, abs=1e-5)
+
+
+def test_multi_card_decoder_probability_sums_to_one():
+    decoder = TradeDecoder(16, max_cards=2)
+    sides = [counts for counts in product(range(3), repeat=5) if 1 <= sum(counts) <= 2]
+    offers = [
+        TradeOffer(give, receive)
+        for give in sides
+        for receive in sides
+        if not any(g and r for g, r in zip(give, receive, strict=True))
+    ]
+    tokens = [offer_tokens(offer, 2) for offer in offers]
+    padded = torch.tensor([t + (-1,) * (decoder.max_tokens - len(t)) for t in tokens])
+    context = torch.randn(1, 16).expand(len(offers), -1)
+    hand = torch.full((len(offers), 5), 2)
+    limit = torch.full((len(offers),), 2)
+    scores, _ = decoder.score(context, hand, limit, padded)
     assert torch.logsumexp(scores, 0).item() == pytest.approx(0.0, abs=1e-5)
 
 

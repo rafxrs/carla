@@ -1,4 +1,8 @@
-"""Canonical, lossless token representation of domestic offers."""
+"""Canonical offer tokens: sorted give cards, SWITCH, sorted receive cards, STOP.
+
+Both sides are from the offer maker's perspective. PAD belongs only to fixed-width
+policy actions; it is never part of a `TradeOffer` or the codec's output.
+"""
 
 from collections.abc import Sequence
 

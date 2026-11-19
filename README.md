@@ -48,6 +48,7 @@ carla tournament --config configs/bots.yaml            # win rates with 95% CIs
 carla config configs/experiments/gnn.yaml model.belief=gru   # print a resolved config
 carla train configs/smoke.yaml       # short end-to-end PPO run
 carla train configs/experiments/ppo_mlp_baseline.yaml
+carla train configs/experiments/ppo_mlp_trade_decoder.yaml  # multi-card offers; see docs/trade_decoder.md
 carla train configs/experiments/ppo_mlp_baseline.yaml --resume runs/<run>/latest.pt ppo.total_env_steps=200000
 carla evaluate runs/<run>/latest.pt --opponent heuristic --boards 50 --seed 10000
 carla policy-tournament runs/<run-a>/latest.pt runs/<run-b>/latest.pt heuristic random --boards 50 --seed 20000 --csv outputs/policy-tournament.csv

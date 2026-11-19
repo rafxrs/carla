@@ -52,7 +52,8 @@ class ObservationEncoder:
     """Turns (game, observer, recent events) into a dict of float32 arrays plus action masks.
 
     Keys and shapes: tiles (19, TILE_FEATURES), corners (54, CORNER_FEATURES),
-    edges (72, EDGE_FEATURES), players (4, PLAYER_FEATURES), hand (5,) own resources,
+    edges (72, EDGE_FEATURES), players (4, PLAYER_FEATURES), hand (5,) normalized own resources,
+    own_hand_counts (5,) exact integer counts, trade_card_limit (1,) engine cap (-1 if absent),
     dev_cards (10,) own cards held + playable now, globals (GLOBAL_FEATURES,),
     trade_context (TRADE_FEATURES,) public pending offer, acceptances, remaining limits and
     counteroffers by relative seat,

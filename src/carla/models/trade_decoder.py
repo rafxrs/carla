@@ -10,7 +10,7 @@ START = STOP + 1
 
 
 class TradeDecoder(nn.Module):
-    """One token sequence per offer; dynamic masks use only the actor's hand."""
+    """Generate sorted give/SWITCH/receive/STOP tokens from an actor's context."""
 
     def __init__(self, dim: int, max_cards: int = 4) -> None:
         super().__init__()
@@ -24,10 +24,11 @@ class TradeDecoder(nn.Module):
         self.output = nn.Linear(dim, STOP + 1)
 
     def _mask(self, hand, limit, give, receive, stage, last):
+        """Legal next tokens for each prefix; stage 0 gives and stage 1 requests."""
         cap = torch.where(limit > 0, limit.clamp(max=self.max_cards), self.max_cards)
         ids = torch.arange(NUM_RESOURCES, device=hand.device)[None, :]
         give_total, receive_total = give.sum(1), receive.sum(1)
-        # An offer must leave at least one resource type available to request.
+        # Giving the last unused resource type would leave nothing distinct to request.
         other_type_left = (give == 0).sum(1, keepdim=True) - (give == 0).long()
         give_cards = (
             (give < hand)
@@ -48,6 +49,7 @@ class TradeDecoder(nn.Module):
 
     @staticmethod
     def _advance(token, give, receive, stage, last):
+        """Update counts and the smallest allowed next resource ID."""
         card = token < NUM_RESOURCES
         increment = torch.nn.functional.one_hot(token.clamp(0, NUM_RESOURCES - 1), NUM_RESOURCES)
         give = give + increment * (card & (stage == 0))[:, None]
@@ -72,6 +74,7 @@ class TradeDecoder(nn.Module):
         return hidden, logp, -(logp.exp() * safe).sum(1)
 
     def sample(self, context: Tensor, hand: Tensor, limit: Tensor, deterministic=False):
+        """Return (padded tokens, sampled prefix entropy) for a batch of actors."""
         hidden, previous, give, receive, stage, last = self._start(context)
         tokens = torch.full(
             (len(context), self.max_tokens), PAD, dtype=torch.long, device=context.device
@@ -99,6 +102,7 @@ class TradeDecoder(nn.Module):
         return tokens, entropy_sum
 
     def score(self, context: Tensor, hand: Tensor, limit: Tensor, tokens: Tensor):
+        """Teacher-force stored tokens; return exact sequence log probability and prefix entropy."""
         hidden, previous, give, receive, stage, last = self._start(context)
         logp_sum = context.new_zeros(len(context))
         entropy_sum = logp_sum.clone()
@@ -116,6 +120,7 @@ class TradeDecoder(nn.Module):
             selected = torch.where(active, token, STOP)
             if (active & ~mask.gather(1, selected[:, None]).squeeze(1)).any():
                 raise ValueError("illegal or noncanonical trade token")
+            # Finished rows need one valid dummy token so log_softmax stays finite.
             mask = torch.where(
                 active[:, None],
                 mask,

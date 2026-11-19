@@ -63,7 +63,11 @@ def run_policy_tournament(
     deterministic: bool = True,
     csv_path: Path | None = None,
 ) -> PolicyTournament:
-    """Play every board four times, rotating all four player slots through all seats."""
+    """Rotate four players through every seat on each board.
+
+    Offer counts include initial proposals and counteroffers; multi-card means more
+    than one card on either side. Counts describe attempts, not completed exchanges.
+    """
     if len(players) != 4 or boards <= 0:
         raise ValueError("tournament needs four players and a positive board count")
     policies = {}

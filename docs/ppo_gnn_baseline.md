@@ -3,7 +3,8 @@
 `model.encoder: gnn` selects a native PyTorch policy/value network through the existing
 factory. It uses the same observation arrays, action masks, `PolicyOutput`, factored
 distribution, rollouts, GAE, PPO update, optimizer, checkpoints, and evaluator as the MLP.
-No graph library or observation/engine/action changes are required.
+No graph library is required. The optional trade decoder adds offer tokens to policy actions
+for either encoder; the baseline GNN config still uses the factored distribution.
 
 ## Architecture and shapes
 
@@ -74,9 +75,9 @@ The feed-forward network returns `state=None`, `belief=None`, and one value per 
 
 ## Integration and restrictions
 
-The trainer and evaluator now accept feed-forward `mlp` and `gnn` encoders. The factory
-already selected `GNNPolicy`, so it required no dispatch change. PPO math, rollout collection,
-GAE, action masking, checkpoint serialization, and the MLP implementation are unchanged.
+The trainer and evaluator accept feed-forward `mlp` and `gnn` encoders. They use the same
+PPO update, rollout collector, action masks, and checkpoint format. With the optional trade
+decoder, rollouts also store the padded offer tokens described in [trade_decoder.md](trade_decoder.md).
 
 The trainer supports one or more synchronous CPU workers, each with one or more
 environments; the GNN smoke config uses one environment. Each game has three fixed
