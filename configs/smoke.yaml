@@ -4,9 +4,12 @@ name: smoke
 engine:
   max_turns: 60
 ppo:
-  total_env_steps: 2048
+  total_env_steps: 128
   rollout_steps: 64
   minibatch_size: 128
+opponents:
+  pool:
+    - kind: random
 runtime:
   num_workers: 1
   envs_per_worker: 1

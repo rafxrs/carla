@@ -25,7 +25,8 @@ def test_gae_handles_parallel_envs():
     np.testing.assert_allclose(adv[:, 0], [5, 4, 3, 2, 1])
 
 
-def test_rollout_and_checkpoint_roundtrip(tmp_path):
+@pytest.mark.parametrize("encoder", ["mlp", "gnn"])
+def test_rollout_and_checkpoint_roundtrip(tmp_path, encoder):
     torch = pytest.importorskip("torch")
     from carla.config import ExperimentConfig, ModelConfig
     from carla.engine.actions import NUM_ACTION_TYPES
@@ -37,7 +38,8 @@ def test_rollout_and_checkpoint_roundtrip(tmp_path):
 
     torch.manual_seed(0)
     env = CatanEnv(EngineConfig(max_turns=30))
-    policy = build_policy(ModelConfig(hidden_dim=32, mlp_layers=1))
+    model_config = ModelConfig(encoder=encoder, hidden_dim=32, mlp_layers=1, gnn_layers=2)
+    policy = build_policy(model_config)
     batch, _ = collect_rollout(env, policy, num_steps=40, episode_seed=3)
     assert len(batch) == 40 and batch.observations["masks"]["type"].shape == (40, NUM_ACTION_TYPES)
     assert batch.dones.sum() >= 1
@@ -45,8 +47,112 @@ def test_rollout_and_checkpoint_roundtrip(tmp_path):
     assert all(type_masks[t][batch.actions[t][0]] for t in range(len(batch)))
 
     path = save_checkpoint(tmp_path / "c.pt", policy, config=ExperimentConfig(), env_steps=40)
-    clone = build_policy(ModelConfig(hidden_dim=32, mlp_layers=1))
+    clone = build_policy(model_config)
     meta = load_checkpoint(path, clone)
     assert meta["counters"] == {"env_steps": 40} and meta["config"]["name"] == "default"
-    for a, b in zip(policy.parameters(), clone.parameters(), strict=True):
-        assert torch.equal(a, b)
+    for name, tensor in policy.state_dict().items():
+        assert torch.equal(tensor, clone.state_dict()[name])
+
+
+@pytest.mark.parametrize("encoder", ["mlp", "gnn"])
+def test_ppo_update_changes_finite_weights_and_rejects_stale_batch(encoder):
+    torch = pytest.importorskip("torch")
+    from carla.config import ModelConfig, PPOConfig
+    from carla.engine.config import EngineConfig
+    from carla.envs import CatanEnv
+    from carla.models import build_policy
+    from carla.rl.ppo import PPOLearner
+    from carla.rl.rollout import collect_rollout
+
+    torch.manual_seed(2)
+    policy = build_policy(ModelConfig(encoder=encoder, hidden_dim=16, mlp_layers=1, gnn_layers=2))
+    learner = PPOLearner(policy, PPOConfig(epochs=1, minibatch_size=8))
+    before = [parameter.detach().clone() for parameter in policy.parameters()]
+    batch, _ = collect_rollout(CatanEnv(EngineConfig(max_turns=12)), policy, 8, episode_seed=2)
+    stats = learner.update([batch])
+    assert learner.version == 1
+    assert all(np.isfinite(value) for value in stats.values())
+    assert all(torch.isfinite(parameter).all() for parameter in policy.parameters())
+    assert any(
+        not torch.equal(old, new) for old, new in zip(before, policy.parameters(), strict=True)
+    )
+    with pytest.raises(ValueError, match="current policy version"):
+        learner.update([batch])
+
+
+def test_batched_rollouts_use_one_forward_pass_per_step_and_keep_envs_separate(monkeypatch):
+    torch = pytest.importorskip("torch")
+    from carla.config import ModelConfig, PPOConfig
+    from carla.engine.config import EngineConfig
+    from carla.envs import CatanEnv
+    from carla.models import build_policy
+    from carla.rl.ppo import PPOLearner
+    from carla.rl.rollout import collect_rollouts
+
+    torch.manual_seed(3)
+    policy = build_policy(ModelConfig(hidden_dim=16, mlp_layers=1))
+    learner = PPOLearner(policy, PPOConfig(epochs=1, minibatch_size=16))
+    envs = [CatanEnv(EngineConfig(max_turns=2)) for _ in range(3)]
+    sizes = []
+    forward = policy.forward
+
+    def counted(obs, state=None):
+        sizes.append(len(obs["globals"]))
+        return forward(obs, state)
+
+    monkeypatch.setattr(policy, "forward", counted)
+    batches, observations = collect_rollouts(
+        envs, policy, 24, episode_seeds=[3, 4, 5], policy_version=learner.version
+    )
+    assert sizes == [3] * 25  # 24 action selections and one bootstrap evaluation
+    assert len(batches) == len(observations) == 3
+    assert all(len(batch) == 24 and batch.policy_version == 0 for batch in batches)
+    assert sum(int(batch.dones.sum()) for batch in batches) >= 1
+    for batch in batches:
+        masks = batch.observations["masks"]["type"]
+        assert all(masks[t, batch.actions[t, 0]] for t in range(len(batch)))
+    stats = learner.update(batches)
+    assert all(np.isfinite(value) for value in stats.values())
+    assert learner.version == 1
+    more, _ = collect_rollouts(envs, policy, 2, observations, policy_version=learner.version)
+    assert len(more) == 3 and all(len(batch) == 2 for batch in more)
+    with pytest.raises(ValueError, match="observations must match"):
+        collect_rollouts(envs, policy, 1, observations[:1])
+
+
+def test_masked_entropy_has_finite_gradients():
+    torch = pytest.importorskip("torch")
+    from carla.config import ModelConfig
+    from carla.envs import CatanEnv
+    from carla.models import build_policy
+    from carla.models.base import batch_observations
+
+    policy = build_policy(ModelConfig(hidden_dim=16, mlp_layers=1))
+    obs, _ = CatanEnv().reset(seed=7)
+    batch = batch_observations([obs])
+    policy(batch).distribution(batch["masks"]).entropy().mean().backward()
+    assert all(
+        parameter.grad is None or torch.isfinite(parameter.grad).all()
+        for parameter in policy.parameters()
+    )
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ("runtime.envs_per_worker=0", "positive workers and environments"),
+        ("model.belief=gru", "without belief"),
+        ("model.set_attention=true", "does not support attention"),
+        ("model.trade_decoder=transformer", "transformer trade decoding"),
+        ("opponents.pool=[{kind: self}]", "one fixed random or heuristic"),
+        ("opponents.pool=[{kind: random}, {kind: heuristic}]", "one fixed random or heuristic"),
+        ("ppo.total_env_steps=0", "budgets must be positive"),
+    ],
+)
+def test_gnn_training_preserves_baseline_restrictions(override, message):
+    pytest.importorskip("torch")
+    from carla.config import load_config
+    from carla.rl.train import _validate
+
+    with pytest.raises(ValueError, match=message):
+        _validate(load_config("configs/gnn_smoke.yaml", [override]))

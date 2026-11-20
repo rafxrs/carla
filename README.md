@@ -1,7 +1,6 @@
 # CARLA - Catan Advanced Reinforcement Learning Agent
 
-A powerful Deep RL catan agent.
-CARLA learns four-player Settlers of Catan by self-play PPO on top of its own deterministic rules engine.
+CARLA is a four-player Settlers of Catan reinforcement-learning project built on its own deterministic rules engine. Synchronous MLP and GNN PPO baselines train against fixed bots; self-play is planned.
 
 ## Status
 
@@ -9,15 +8,20 @@ CARLA learns four-player Settlers of Catan by self-play PPO on top of its own de
 | --------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `engine/` | engine     | Base rules, maritime trade, and domestic proposals, invitations, counteroffers, confirmation, configurable limits, snapshots, deterministic replay, and logs. Larger offers are validated when submitted. |
 | `config/` | shared     | Typed dataclasses, YAML `extends`, dotted overrides, strict validation.                                                                                                                                                                                                                                 |
-| `envs/`   | RL         | Factored action heads and masks, including one-for-one offers, public trade context, rewards, self-play env, Gymnasium env. |
+| `envs/`   | RL         | Factored action heads and masks, canonical multi-card offer tokens, public trade context, rewards, self-play env, Gymnasium env. |
 | `agents/` | eval/bots  | Random and heuristic bots, including domestic proposals and counteroffers when enabled. |
-| `eval/`   | eval/bots  | Seeded tournaments with seat rotation and Wilson CIs, multi-process. Recorded games support trade feasibility, acceptance, and execution metrics. Plots: TODO. |
-| `models/` | models     | Masked factored distribution and MLP baseline handle one-for-one offers. GNN, set attention, belief module, and variable-length trade decoder remain TODOs. |
-| `rl/`     | RL         | GAE, rollout collection, checkpoints, PPO update, async workers, opponent pool.                                                                                                                                                                           |
+| `eval/`   | eval/bots  | Seeded tournaments with seat rotation and Wilson CIs, multi-process. Trade metrics, experiment CSV summaries, and learning/diagnostic plots. |
+| `models/` | models     | MLP and board GNN policies, masked action heads, and an optional GRU decoder for multi-card domestic offers. Set attention and belief remain TODOs. |
+| `rl/`     | RL         | Synchronous MLP/GNN PPO with batched CPU rollout workers, resumable CSV logging/checkpoints, fixed-bot validation, gamma/lambda sweeps, and checkpoint tournaments. Self-play opponent pools remain TODOs. |
 | `gui/`    | GUI        | Arcade play, watch, and replay modes. Click resource cards to build a trade, then send it to the bank or the other players; offers, answers and counteroffers show their cards. Player trading is on unless `--no-trading`. |
 
 The domestic trade protocol, defaults, and extension points are documented in
-[docs/domestic_trading.md](docs/domestic_trading.md).
+[docs/domestic_trading.md](docs/domestic_trading.md). The neural trade path is documented in
+[docs/trade_decoder.md](docs/trade_decoder.md).
+For Gymnasium clients that check decoder action shapes, use `TradeActionWrapper` as shown there.
+
+Training metrics, periodic validation, gamma/lambda/rollout sweeps, and analysis commands are
+documented in [docs/experiments.md](docs/experiments.md).
 
 ## Setup
 
@@ -43,13 +47,18 @@ carla simulate --games 5 --agents heuristic random random random --config config
 carla replay runs/games/game_0000.json.gz --step 120   # position after line #120 of game_0000.txt
 carla tournament --config configs/bots.yaml            # win rates with 95% CIs
 carla config configs/experiments/gnn.yaml model.belief=gru   # print a resolved config
-carla train configs/smoke.yaml       # dry run until the PPO update lands
+carla train configs/smoke.yaml       # short end-to-end PPO run
+carla train configs/experiments/ppo_mlp_baseline.yaml
+carla train configs/experiments/ppo_mlp_trade_decoder.yaml  # multi-card offers; see docs/trade_decoder.md
+carla train configs/experiments/ppo_mlp_baseline.yaml --resume runs/<run>/latest.pt ppo.total_env_steps=200000
+carla evaluate runs/<run>/latest.pt --opponent heuristic --boards 50 --seed 10000
+carla policy-tournament runs/<run-a>/latest.pt runs/<run-b>/latest.pt heuristic random --boards 50 --seed 20000 --csv outputs/policy-tournament.csv
 carla gui --play                   # needs the gui extra; play against 3 bots with trading on
 carla gui --play --no-trading                     # bank and port trades only
 carla gui --watch --opponents heuristic,random    # a live bot game with play/pause/step/seek
 carla gui runs/games/game_0000.json.gz            # replay a record
 python scripts/benchmark_engine.py
-sbatch --array=0-2 scripts/slurm/train.sbatch configs/experiments/mlp.yaml   # 3 seeds
+sbatch --array=0-2 scripts/slurm/train.sbatch configs/experiments/ppo_mlp_baseline.yaml
 ```
 
 ## Layout
@@ -98,9 +107,9 @@ Three contracts connect the workstreams:
 
 1. **Observations**: `envs/observation.py` lists the arrays. Seats are relative (0 = the actor), and there are no board coordinates.
 2. **Action masks**: `envs/action_space.py` documents the heads and the mask table.
-3. **Policy output**: `models/base.py` defines `PolicyOutput`, and `FactoredDistribution` samples it, scores log-probs and computes the exact entropy.
+3. **Policy output**: `models/base.py` defines `PolicyOutput`; the factored distribution scores the baseline heads, and the optional trade distribution adds exact offer log-probabilities and sampled token entropy.
 
-Planned training loop (semi-asynchronous PPO, `rl/`):
+Current training batches MLP or GNN actions across Gymnasium environments in each CPU rollout process and performs synchronous on-policy PPO updates. See [docs/ppo_mlp_baseline.md](docs/ppo_mlp_baseline.md) and [docs/ppo_gnn_baseline.md](docs/ppo_gnn_baseline.md). The planned semi-asynchronous self-play design is:
 
 ```mermaid
 flowchart LR

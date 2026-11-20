@@ -85,7 +85,7 @@ class CatanAECEnv:
         return self.encoder.encode(self.game, seat, events)
 
     def step(self, action: Action | Sequence[int] | np.ndarray) -> AECStep:
-        """Apply `action` (an engine Action or head indices) for the actor."""
+        """Apply an engine Action or policy indices, including offer tokens, for the actor."""
         game = self.game
         if not isinstance(action, Action):
             action = decode_action(action, game.decision_player)
@@ -115,7 +115,10 @@ class _LegalActionSpace(spaces.MultiDiscrete):
     """Sample a legal head vector for the environment's current learner decision."""
 
     def __init__(self, env: "CatanEnv") -> None:
-        super().__init__([HEAD_SIZES[h] for h in HEAD_NAMES])
+        # The policy writes -1 to heads its chosen action does not use.
+        start = [0] + [-1] * (len(HEAD_NAMES) - 1)
+        nvec = [HEAD_SIZES["type"]] + [HEAD_SIZES[h] + 1 for h in HEAD_NAMES[1:]]
+        super().__init__(nvec, start=start)
         self.env = env
 
     def sample(self, mask=None, probability=None):
@@ -126,16 +129,16 @@ class _LegalActionSpace(spaces.MultiDiscrete):
             return super().sample()
         legal = game.legal_actions()
         action = legal[int(self.np_random.integers(len(legal)))]
-        heads = encode_action(action, self.env.learner)
-        return np.maximum(heads, 0)
+        return encode_action(action, self.env.learner)
 
 
 class CatanEnv(gym.Env):
     """One learner seat against three embedded opponents (`RandomAgent`s by default).
 
-    Actions are head indices (`MultiDiscrete` in `HEAD_NAMES` order, unused heads ignored) or
+    Actions are head indices (`MultiDiscrete` in `HEAD_NAMES` order, unused heads are `-1`) or
     engine `Action`s; illegal actions raise `IllegalActionError`. `info["legal_actions"]` lists
-    the learner's legal actions and `info["hidden_truth"]` the opponents' cards.
+    the learner's legal actions and `info["hidden_truth"]` the opponents' cards. Use
+    `TradeActionWrapper` to declare decoder actions to Gymnasium clients.
     """
 
     metadata = {"render_modes": ["ansi"]}  # noqa: RUF012 (gymnasium API)

@@ -7,11 +7,13 @@ from carla.models.mlp import MLPPolicy
 
 
 def build_policy(config: ModelConfig) -> PolicyNetwork:
-    """TODO(models): wire set attention, belief module and trade decoder into both encoders."""
-    if config.belief != "none" or config.set_attention or config.trade_decoder != "none":
+    """Build either board encoder with optional GRU trade decoding."""
+    if config.belief != "none" or config.set_attention or config.trade_decoder == "transformer":
         raise NotImplementedError(
-            "belief / set attention / trade decoder are not implemented yet (models workstream)"
+            "belief, set attention, and transformer trade decoding are not implemented"
         )
+    if config.max_trade_cards_per_side < 1:
+        raise ValueError("model.max_trade_cards_per_side must be positive")
     if config.encoder == "mlp":
         return MLPPolicy(config)
     if config.encoder == "gnn":
