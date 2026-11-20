@@ -73,6 +73,28 @@ def test_structured_policy_offer_is_engine_legal_and_hidden_hand_independent():
     assert (offers[:, HEAD_INDEX["resource2"]] == -1).all()
 
 
+def test_trade_entropy_is_available_before_scoring_and_matches_saved_tokens():
+    torch.manual_seed(24)
+    game = post_setup_game(config=EngineConfig(allow_domestic_trade=True))
+    give(game, 0, (2, 1, 0, 0, 0))
+    batch = batch_observations([ObservationEncoder().encode(game, 0)] * 8)
+    batch["masks"]["type"][:] = False
+    batch["masks"]["type"][:, ActionType.PROPOSE_TRADE] = True
+    policy = build_policy(ModelConfig(hidden_dim=16, mlp_layers=1, trade_decoder="gru"))
+    dist = policy(batch).distribution(batch["masks"])
+    standalone_entropy = dist.entropy()
+    assert torch.isfinite(standalone_entropy).all()
+    assert (standalone_entropy > 0).all()
+    standalone_entropy.mean().backward()
+    assert policy.trade_decoder.output.weight.grad is not None
+
+    dist = policy(batch).distribution(batch["masks"])
+    actions = dist.sample()
+    sampled_entropy = dist.entropy()
+    dist.log_prob(actions)
+    assert torch.allclose(sampled_entropy, dist.entropy(), atol=1e-6)
+
+
 def test_counteroffer_uses_responder_hand_and_perspective():
     game = post_setup_game(config=EngineConfig(allow_domestic_trade=True))
     give(game, 0, (1, 0, 0, 0, 0))

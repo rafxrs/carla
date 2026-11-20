@@ -6,6 +6,8 @@ resume recovery, and reproducible plots, see [experiments.md](experiments.md).
 This MLP policy is the project's first trainable baseline. `carla train` collects decisions from `runtime.num_workers * runtime.envs_per_worker` independent `CatanEnv` instances and updates the policy with clipped PPO. Each CPU worker batches one forward pass across its environments at every rollout step. The learner waits for all workers before updating, so every batch uses the same policy version. With one worker, collection runs in the learner process.
 
 Each game has one learner and three fixed bots of the same configured kind (`random` or `heuristic`). The learner seat is random each episode by default. The policy uses legal-action masks and can propose one-for-one domestic trades. Opponents' hidden cards are not policy inputs.
+Policy actions and legal action-space samples use `-1` for unused heads. The engine checks
+which heads matter for the chosen action.
 
 ## Run
 

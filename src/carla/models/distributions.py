@@ -122,6 +122,7 @@ class TradeDistribution(FactoredDistribution):
         self.hand = hand.long()
         self.limit = limit.long().reshape(-1)
         self._conditional_entropy = context.new_zeros(self.batch)
+        self._entropy_ready = False
 
     def sample(self, deterministic: bool = False) -> Tensor:
         heads = super().sample(deterministic)
@@ -129,14 +130,20 @@ class TradeDistribution(FactoredDistribution):
             (self.batch, self.decoder.max_tokens), PAD, dtype=torch.long, device=heads.device
         )
         selected = heads[:, 0] == _T.PROPOSE_TRADE
+        conditional = self.context.new_zeros(self.batch)
         if selected.any():
             # Offer terms live in the tokens; clear the unused one-for-one head values.
             heads[selected, HEAD_INDEX["resource"]] = PAD
             heads[selected, HEAD_INDEX["resource2"]] = PAD
-            sampled, _ = self.decoder.sample(
+            sampled, token_entropy = self.decoder.sample(
                 self.context[selected], self.hand[selected], self.limit[selected], deterministic
             )
             tokens[selected] = sampled
+            conditional = conditional.index_copy(
+                0, selected.nonzero(as_tuple=True)[0], token_entropy
+            )
+        self._conditional_entropy = conditional
+        self._entropy_ready = True
         return torch.cat((heads, tokens), dim=1)
 
     def log_prob(self, actions: Tensor) -> Tensor:
@@ -163,10 +170,14 @@ class TradeDistribution(FactoredDistribution):
             self._conditional_entropy = conditional
         else:
             self._conditional_entropy = total.new_zeros(self.batch)
+        self._entropy_ready = True
         return total
 
     def entropy(self) -> Tensor:
-        """Exact head entropy plus token entropy along the scored offer prefixes."""
+        """Exact head entropy plus sampled token entropy along offer prefixes."""
+        if not self._entropy_ready:
+            # The token term uses a sampled prefix; draw one if none is available yet.
+            self.sample()
         trade_lp = self.logp["trade"]
         safe = torch.where(torch.isfinite(trade_lp), trade_lp, 0.0)
         old_trade_entropy = -(trade_lp.exp() * safe).sum(1)

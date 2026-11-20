@@ -71,7 +71,8 @@ duplicate action encodings and keeps PPO ratios valid. The decoder's entropy ter
 a sampled conditional-token regularizer; the baseline factored distribution retains
 its exact entropy for non-trade branches. With the decoder enabled,
 `head_trade_entropy` reports conditional token entropy along sampled offer prefixes,
-not entropy of the unused one-for-one head.
+not entropy of the unused one-for-one head. Calling `entropy()` without first sampling
+or scoring an action draws a prefix for this estimate.
 
 ## Gymnasium action space
 

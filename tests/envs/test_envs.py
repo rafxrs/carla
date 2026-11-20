@@ -166,6 +166,23 @@ def test_gym_action_space_samples_current_legal_actions(allow_trade):
             break
 
 
+def test_gym_action_space_contains_baseline_policy_action():
+    torch = pytest.importorskip("torch")
+    from carla.config.schema import ModelConfig
+    from carla.models.base import batch_observations
+    from carla.models.factory import build_policy
+
+    env = CatanEnv()
+    obs, _ = env.reset(seed=1)
+    batch = batch_observations([obs])
+    policy = build_policy(ModelConfig(hidden_dim=16, mlp_layers=1))
+    with torch.no_grad():
+        action = policy(batch).distribution(batch["masks"]).sample()[0].numpy()
+    assert -1 in action
+    assert env.action_space.contains(action)
+    assert decode_action(action, env.learner) in env.game.legal_actions()
+
+
 @pytest.mark.parametrize("allow_trade", [False, True])
 def test_gymnasium_passive_api_checker(allow_trade):
     env = CatanEnv(EngineConfig(allow_domestic_trade=allow_trade))
