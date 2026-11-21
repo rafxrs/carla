@@ -221,3 +221,8 @@ __marimo__/
 runs/
 outputs/
 docs/~$CARLA_setup_overview.pptx
+
+
+CARLA_CODEBASE_REPORT.md
+
+carla_vs_workspace.code-workspace
