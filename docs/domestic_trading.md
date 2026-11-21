@@ -5,12 +5,13 @@ three players, separate from bank and port trading. After rolling, the active pl
 proposes resource terms or invites offers. Each opponent responds once; the active
 player confirms one exchange or cancels. Cards move only on confirmation.
 
-The engine and Arcade GUI accept multi-card, multi-resource offers. The current
-factored policy and baseline bots generate one-for-one offers. That smaller policy
-action space is not the engine's rule limit. The engine leaves trading off by default;
+The engine and Arcade GUI accept multi-card, multi-resource offers. The baseline
+factored policy and bots generate one-for-one offers; the optional GRU decoder
+generates larger offers. The engine leaves trading off by default;
 the runnable MLP example `configs/experiments/domestic_trade.yaml` enables it, and
-`carla gui` turns it on unless given `--no-trading`. `full_trade.yaml`
-describes planned model work, not a completed training configuration.
+`carla gui` turns it on unless given `--no-trading`.
+`ppo_mlp_trade_decoder.yaml` runs the decoder. `full_trade.yaml` still depends on
+unfinished belief and attention work.
 
 ## Offer meaning
 
@@ -80,7 +81,7 @@ bank is unaffected by domestic exchanges.
 | Data and configuration | `engine/actions.py`, `engine/config.py`, `engine/state.py` | Defines offers, action kinds, phases, negotiation state, limits, and JSON-compatible snapshots. |
 | Rules and transitions | `engine/rules.py`, `engine/game.py` | Lists baseline legal actions, validates arbitrary submitted offers, enforces hand and phase checks, transfers cards, and clears round state. |
 | Events and replay | `engine/events.py`, `engine/text.py`, game records | Publishes invitations, proposals, responses, counters, executions, and cancellations, with readable logs and exact replay. |
-| Environment and model | `envs/action_space.py`, `envs/observation.py`, `models/` | Adds trade action types and masks, public relative-seat context, and one-for-one policy heads. |
+| Environment and model | `envs/action_space.py`, `envs/observation.py`, `models/` | Adds trade action types and masks, public relative-seat context, baseline heads, and optional offer tokens. |
 | Human and bot play | `gui/controller.py`, `gui/trade.py`, `gui/session.py`, `agents/` | Builds offers from hand cards in Arcade, shows every offer and answer as cards, and supplies baseline decisions. |
 | Evaluation | `eval/metrics.py`, `cli.py` | Reports invitations, counters, feasibility, acceptance, and execution from recorded games and tournaments. |
 
@@ -97,12 +98,13 @@ Without domestic trade, `GameState.to_dict()` leaves out the negotiation fields 
 and hash, exactly as before domestic trade existed, so records saved earlier still
 replay.
 
-`legal_actions()` enumerates the fixed one-for-one subset that the current policy
-can represent. `Game.is_legal()` additionally accepts any offer that
+`legal_actions()` enumerates the fixed one-for-one subset used by the baseline
+policy. `Game.is_legal()` additionally accepts any offer that
 `legal_trade_offer()` allows: a valid offer (`valid_trade_offer()`) that opens a
 negotiation or answers one. An engine or GUI offer can therefore be legal without
-appearing in the enumerable policy list. `build_masks()` and `encode_action()`
-explicitly reject multi-card offers instead of dropping extra cards.
+appearing in the enumerable policy list. `build_masks()` and the legacy
+`encode_action()` explicitly reject multi-card offers instead of dropping cards;
+the GRU's canonical token path handles larger offers.
 
 The `trade_context` observation encodes public pending terms, acceptances,
 counteroffers by seat relative to the observer, and normalized remaining-limit
@@ -156,20 +158,18 @@ The README has simulation and tournament commands for non-GUI runs.
 
 ## Building on this system
 
-1. **Variable-length neural offers.** Add a decoder that chooses legal `give` and
-   `receive` count vectors using the acting hand and public state. Keep
-   `legal_trade_offer()` as the final engine check. Update model sampling, action
-   encoding, and tests together; the current `(give resource, receive resource)`
-   mask cannot represent extra cards without losing information.
+1. **Variable-length neural offers.** The optional GRU decoder chooses `give` and
+   `receive` count vectors using the acting hand and public state. See
+   [trade_decoder.md](trade_decoder.md) for the token rules and PPO integration.
+   `legal_trade_offer()` remains the final engine check.
 2. **Better trading agents.** Use the existing response and confirmation phases,
    public terms, and own-hand checks. Evaluate whether terms improve a build plan
    or expected outcome. The baseline heuristic uses simple resource deficits and
    is not an optimized negotiator.
-3. **Belief and PPO work.** Infer opponents' holdings from public events. Keep
+3. **Belief work.** Infer opponents' holdings from public events. Keep
    inferred state separate from ground-truth auxiliary targets, and do not feed
-   hidden hands into policy inputs. The MLP example runs on one-for-one terms;
-   PPO updates, the opponent pool, belief module, and advanced encoders are
-   separate project work.
+   hidden hands into policy inputs. The opponent pool, belief module, and set
+   attention remain separate project work.
 4. **New rules or limits.** Change typed `EngineConfig`, the initiation checks,
    and the offer validator together, then expose the setting in an experiment
    YAML. Preserve the one-response-per-seat bound and the hand checks if the
@@ -180,16 +180,9 @@ The README has simulation and tournament commands for non-GUI runs.
 
 ## Verification and present boundary
 
-The complete local suite passed with 604 tests and `CARLA_REQUIRE_GUI=1`, so
-Arcade window tests fail instead of silently skipping when a display is absent.
-Targeted tests cover multi-card terms, limits, hidden information, action
-encoding, replay, metrics, bots, and the GUI. A 32-seed stress audit covered
-1,704 proposals, 4,816 counters, 55 invitations, and 569 completed exchanges;
-resource invariants held after each decision and recorded games replayed exactly.
-Ruff, Black, and patch checks passed locally. Remote CI awaits a push.
-
-The engine and human GUI can make multi-card offers, while neural policy heads
-represent one-for-one terms. Gymnasium's generic full `check_env` probe may reuse
+The engine and human GUI accept multi-card offers, and the optional decoder can
+generate them for the neural policy. The baseline policy still uses one-for-one
+terms. Gymnasium's generic full `check_env` probe may reuse
 an action after resetting to a different board where that action is illegal;
 CARLA intentionally rejects illegal actions. Its passive API checks, legal-action
 sampling, and seeded full episodes passed.

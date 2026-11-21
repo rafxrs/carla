@@ -3,3 +3,4 @@ name: gnn
 model:
   encoder: gnn
   gnn_layers: 4
+  gnn_tile_nodes: true

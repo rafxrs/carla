@@ -1,4 +1,4 @@
-# Planned advanced model stack. The GNN, belief module, and trade decoder are still TODOs.
+# Planned combination: GNN and GRU trade decoder work; attention and belief remain TODOs.
 extends: gnn_attention_belief.yaml
 name: full_trade
 engine:
