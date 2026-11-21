@@ -146,9 +146,9 @@ def test_train_resume_and_evaluate(tmp_path, capsys, encoder):
     )
     (reference_run,) = uninterrupted.iterdir()
     reference = torch.load(reference_run / "latest.pt", weights_only=False)
-    assert all(
-        torch.equal(value, reference["policy"][name]) for name, value in second["policy"].items()
-    )
+    # GNN scatter-adds on CUDA are not bitwise deterministic; allow float rounding noise.
+    for name, value in second["policy"].items():
+        torch.testing.assert_close(value, reference["policy"][name], rtol=1e-5, atol=1e-5)
 
 
 def test_batched_training_exact_budget_and_resume(tmp_path):
