@@ -21,8 +21,9 @@ partner         (4,)      player               type == CONFIRM_TRADE
 trade           (5, 5)    resource -> resource2 type == PROPOSE_TRADE (1 card each)
 ==============  ========  ===================  ==========================================
 
-The heads offer one-for-one trades. Larger and mixed offers are accepted by the engine and GUI;
-the planned trade decoder can extend the policy beyond this baseline action subset.
+The eight heads represent one-for-one trades. With the optional trade decoder, a policy
+appends a fixed-width token tail to those heads for multi-card offers. `decode_action`
+accepts both formats; `encode_action` and `sample_heads` use the eight-head subset.
 """
 
 from collections.abc import Iterable, Mapping, Sequence
@@ -34,6 +35,7 @@ from carla.engine import actions as A
 from carla.engine.actions import NUM_ACTION_TYPES, Action, ActionType
 from carla.engine.constants import NUM_DEV_CARD_TYPES, NUM_PLAYERS, NUM_RESOURCES, DevCard
 from carla.engine.topology import NUM_CORNERS, NUM_EDGES, NUM_TILES
+from carla.envs.trade_tokens import PAD, STOP, tokens_offer
 
 HEAD_SIZES: dict[str, int] = {
     "type": NUM_ACTION_TYPES,
@@ -209,7 +211,7 @@ def encode_action(action: Action, actor: int) -> np.ndarray:
 
 
 def decode_action(heads: Sequence[int] | np.ndarray | Mapping[str, int], actor: int) -> Action:
-    """Inverse of `encode_action`; heads not used by the chosen type are ignored."""
+    """Decode baseline heads or a decoder offer with a padded token tail."""
     if isinstance(heads, Mapping):
         get = heads.__getitem__
     else:
@@ -217,6 +219,12 @@ def decode_action(heads: Sequence[int] | np.ndarray | Mapping[str, int], actor: 
         get = lambda name: values[HEAD_INDEX[name]]  # noqa: E731
     action_type = ActionType(get("type"))
     if action_type == _T.PROPOSE_TRADE:
+        if not isinstance(heads, Mapping) and len(values) > len(HEAD_NAMES):
+            # STOP terminates the offer; fixed-width rollout storage fills the rest with PAD.
+            tail = values[len(HEAD_NAMES) :]
+            if STOP not in tail or any(t != PAD for t in tail[tail.index(STOP) + 1 :]):
+                raise ValueError("invalid padded trade tokens")
+            return Action(_T.PROPOSE_TRADE, trade=tokens_offer(tail[: tail.index(STOP) + 1]))
         give, receive = int(get("resource")), int(get("resource2"))
         if not 0 <= give < NUM_RESOURCES or not 0 <= receive < NUM_RESOURCES or give == receive:
             raise ValueError("invalid one-for-one trade heads")

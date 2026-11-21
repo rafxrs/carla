@@ -52,7 +52,8 @@ class ObservationEncoder:
     """Turns (game, observer, recent events) into a dict of float32 arrays plus action masks.
 
     Keys and shapes: tiles (19, TILE_FEATURES), corners (54, CORNER_FEATURES),
-    edges (72, EDGE_FEATURES), players (4, PLAYER_FEATURES), hand (5,) own resources,
+    edges (72, EDGE_FEATURES), players (4, PLAYER_FEATURES), hand (5,) normalized own resources,
+    own_hand_counts (5,) exact integer counts, trade_card_limit (1,) engine cap (-1 if absent),
     dev_cards (10,) own cards held + playable now, globals (GLOBAL_FEATURES,),
     trade_context (TRADE_FEATURES,) public pending offer, acceptances, remaining limits and
     counteroffers by relative seat,
@@ -76,6 +77,10 @@ class ObservationEncoder:
                 "edges": box(NUM_EDGES, EDGE_FEATURES),
                 "players": box(NUM_PLAYERS, PLAYER_FEATURES),
                 "hand": box(NUM_RESOURCES),
+                "own_hand_counts": spaces.Box(0, 100, shape=(NUM_RESOURCES,), dtype=np.int64),
+                "trade_card_limit": spaces.Box(
+                    -1, np.iinfo(np.int64).max, shape=(1,), dtype=np.int64
+                ),
                 "dev_cards": box(2 * NUM_DEV_CARD_TYPES),
                 "globals": box(GLOBAL_FEATURES),
                 "trade_context": box(TRADE_FEATURES),
@@ -193,6 +198,17 @@ class ObservationEncoder:
             "edges": edges,
             "players": players,
             "hand": hand,
+            "own_hand_counts": np.asarray(s.hands[observer], dtype=np.int64),
+            "trade_card_limit": np.asarray(
+                [
+                    (
+                        -1
+                        if s.config.max_trade_cards_per_side is None
+                        else s.config.max_trade_cards_per_side
+                    )
+                ],
+                dtype=np.int64,
+            ),
             "dev_cards": dev_cards,
             "globals": g,
             "trade_context": trade_context,

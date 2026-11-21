@@ -220,6 +220,9 @@ __marimo__/
 # CARLA outputs (runs, checkpoints, game logs)
 runs/
 outputs/
+
+# Local development notes and experiments
+/docs/dev_materials/
 docs/~$CARLA_setup_overview.pptx
 
 

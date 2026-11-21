@@ -25,6 +25,7 @@ from carla.envs.observation import (
 )
 from carla.models.base import PolicyNetwork, PolicyOutput
 from carla.models.graph import board_graph
+from carla.models.trade_decoder import TradeDecoder
 
 NON_BOARD_KEYS = ("players", "hand", "dev_cards", "globals", "trade_context")
 NON_BOARD_SIZE = (
@@ -183,6 +184,11 @@ class GNNPolicy(PolicyNetwork):
             }
         )
         self.value = nn.Linear(hidden, 1)
+        self.trade_decoder = (
+            TradeDecoder(hidden, config.max_trade_cards_per_side)
+            if config.trade_decoder == "gru"
+            else None
+        )
 
     def forward(self, obs: dict[str, Tensor], state: Tensor | None = None) -> PolicyOutput:
         batch = obs["globals"].shape[0]
@@ -215,4 +221,11 @@ class GNNPolicy(PolicyNetwork):
             ).reshape(batch, *shape)
             for key, shape in MASK_SHAPES.items()
         }
-        return PolicyOutput(logits=logits, value=self.value(context).squeeze(1))
+        return PolicyOutput(
+            logits=logits,
+            value=self.value(context).squeeze(1),
+            trade_decoder=self.trade_decoder,
+            trade_context=context if self.trade_decoder is not None else None,
+            trade_hand=obs["own_hand_counts"] if self.trade_decoder is not None else None,
+            trade_limit=obs["trade_card_limit"] if self.trade_decoder is not None else None,
+        )

@@ -1,0 +1,11 @@
+# MLP PPO with multi-card domestic offers and a masked GRU decoder.
+extends: ppo_mlp_baseline.yaml
+name: ppo_mlp_trade_decoder
+engine:
+  allow_domestic_trade: true
+  max_trade_proposals_per_turn: 3
+  max_domestic_trades_per_turn: 3
+  max_trade_cards_per_side: 4
+model:
+  trade_decoder: gru
+  max_trade_cards_per_side: 4

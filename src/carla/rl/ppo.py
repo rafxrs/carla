@@ -80,6 +80,14 @@ class PPOLearner:
         )
         advantages_t = torch.as_tensor(np.concatenate(advantages), device=self.device)
         returns_t = torch.as_tensor(np.concatenate(returns), device=self.device)
+        raw_stats = {
+            "advantage_mean": float(advantages_t.mean()),
+            "advantage_std": float(advantages_t.std(unbiased=False)),
+            "return_mean": float(returns_t.mean()),
+            "return_std": float(returns_t.std(unbiased=False)),
+            "value_mean": float(old_values.mean()),
+            "value_std": float(old_values.std(unbiased=False)),
+        }
         advantages_t = (advantages_t - advantages_t.mean()) / (
             advantages_t.std(unbiased=False) + 1e-8
         )
@@ -151,4 +159,6 @@ class PPOLearner:
             - (returns_t - old_values).var(unbiased=False) / (returns_t.var(unbiased=False) + 1e-8)
         )
         result["epochs_stopped_early"] = float(early_stop)
+        result["optimizer_steps"] = len(stats["policy_loss"])
+        result.update(raw_stats)
         return result
