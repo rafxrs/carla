@@ -141,11 +141,11 @@ def test_masked_entropy_has_finite_gradients():
     ("override", "message"),
     [
         ("runtime.envs_per_worker=0", "positive workers and environments"),
-        ("model.belief=gru", "without belief"),
-        ("model.set_attention=true", "does not support attention"),
+        ("model.belief=lstm", "belief must be none or gru"),
+        ("model.encoder=mlp", None),
         ("model.trade_decoder=transformer", "transformer trade decoding"),
-        ("opponents.pool=[{kind: self}]", "one fixed random or heuristic"),
-        ("opponents.pool=[{kind: random}, {kind: heuristic}]", "one fixed random or heuristic"),
+        ("opponents.pool=[{kind: self}]", "random/heuristic with positive weight"),
+        ("opponents.pool=[{kind: random, weight: 0}]", "random/heuristic with positive weight"),
         ("ppo.total_env_steps=0", "budgets must be positive"),
     ],
 )
@@ -154,5 +154,12 @@ def test_gnn_training_preserves_baseline_restrictions(override, message):
     from carla.config import load_config
     from carla.rl.train import _validate
 
+    if message is None:  # the MLP encoder rejects the GNN-only belief and attention modules
+        config = load_config(
+            "configs/gnn_smoke.yaml", [override, "model.belief=gru", "model.set_attention=true"]
+        )
+        message = "require model.encoder=gnn"
+    else:
+        config = load_config("configs/gnn_smoke.yaml", [override])
     with pytest.raises(ValueError, match=message):
-        _validate(load_config("configs/gnn_smoke.yaml", [override]))
+        _validate(config)

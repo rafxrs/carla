@@ -10,6 +10,11 @@ from torch import Tensor, nn
 from carla.models.distributions import FactoredDistribution, TradeDistribution
 from carla.models.trade_decoder import TradeDecoder
 
+STATE_KEY = "belief_state"
+"""Observation entry holding a recurrent policy's state before the decision."""
+TARGET_KEY = "belief_target"
+"""Observation entry holding the belief auxiliary targets (training only, never a model input)."""
+
 
 @dataclass
 class PolicyOutput:
@@ -49,10 +54,24 @@ class PolicyNetwork(nn.Module):
     """Maps batched observations (see `ObservationEncoder`) to a `PolicyOutput`.
 
     Recurrent models carry a state across a seat's consecutive decisions; feed-forward models
-    ignore `state` and return None.
+    ignore `state` and return None. Recurrent models read their state from `state` or, when
+    it is None, from `obs[STATE_KEY]`, and start from zeros when neither is given.
     """
 
+    state_dim: int = 0
+    """Size of the recurrent state; 0 for feed-forward models."""
+
+    @property
+    def recurrent(self) -> bool:
+        return self.state_dim > 0
+
     def initial_state(self, batch_size: int, device: torch.device | str = "cpu") -> Tensor | None:
+        if not self.recurrent:
+            return None
+        return torch.zeros(batch_size, self.state_dim, device=device)
+
+    def auxiliary_loss(self, output: PolicyOutput, obs: dict[str, Tensor]) -> Tensor | None:
+        """Weighted auxiliary loss (belief prediction), or None when there is none."""
         return None
 
     def forward(self, obs: dict[str, Tensor], state: Tensor | None = None) -> PolicyOutput:
@@ -73,3 +92,20 @@ def batch_observations(
         else:
             out[key] = torch.as_tensor(np.stack([o[key] for o in observations]), device=device)
     return out
+
+
+def with_state(policy: PolicyNetwork, obs: dict, state: np.ndarray | Tensor | None = None) -> dict:
+    """Return `obs` carrying a recurrent policy's state (zeros at an episode start).
+
+    Feed-forward policies get `obs` back unchanged. `state` is the policy's output state after
+    the previous decision of the same episode; None keeps an existing entry or starts at zeros.
+    """
+    if not policy.recurrent:
+        return obs
+    if state is None:
+        if STATE_KEY in obs:
+            return obs
+        return {**obs, STATE_KEY: np.zeros(policy.state_dim, dtype=np.float32)}
+    if isinstance(state, Tensor):
+        state = state.detach().cpu().numpy()
+    return {**obs, STATE_KEY: np.asarray(state, dtype=np.float32)}

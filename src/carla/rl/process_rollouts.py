@@ -14,6 +14,7 @@ from carla.config.schema import ExperimentConfig
 from carla.envs.catan_env import CatanEnv
 from carla.models.factory import build_policy
 from carla.rl.metrics import EpisodeTracker, RolloutDiagnostics
+from carla.rl.opponents import bot_tables
 from carla.rl.rollout import collect_rollouts
 from carla.utils.seeding import derive_seed, seed_everything
 
@@ -41,10 +42,12 @@ def _worker(conn: Connection, worker_id: int, config: ExperimentConfig, saved: d
         )
         policy = build_policy(config.model)
         if saved is None:
-            opponent = config.opponents.pool[0].kind
+            tables = bot_tables(
+                config.opponents, config.runtime.num_workers, config.runtime.envs_per_worker
+            )[worker_id]
             envs = [
-                CatanEnv(config.engine, config.env, [make_agent(opponent) for _ in range(3)])
-                for _ in range(config.runtime.envs_per_worker)
+                CatanEnv(config.engine, config.env, [make_agent(kind) for kind in table])
+                for table in tables
             ]
             observations = [
                 env.reset(seed=derive_seed(config.seed, "worker", worker_id, "env", i))[0]

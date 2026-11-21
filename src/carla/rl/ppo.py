@@ -1,4 +1,8 @@
-"""Synchronous, feed-forward PPO updates for the MLP baseline."""
+"""Synchronous PPO updates.
+
+Recurrent (belief) policies store their state before each decision in the observation, so each
+minibatch recomputes single decisions from stored states (truncated BPTT of one decision).
+"""
 
 import numpy as np
 import torch
@@ -102,6 +106,7 @@ class PPOLearner:
                 "approx_kl",
                 "clip_fraction",
                 "grad_norm",
+                "auxiliary_loss",
             )
         }
         early_stop = False
@@ -125,6 +130,11 @@ class PPOLearner:
                     + self.config.value_coef * value_loss
                     - self.config.entropy_coef * entropy
                 )
+                auxiliary = self.policy.auxiliary_loss(out, mini)
+                if auxiliary is not None:
+                    loss = loss + auxiliary
+                else:
+                    auxiliary = torch.zeros((), device=self.device)
                 if not torch.isfinite(loss):
                     raise FloatingPointError("non-finite PPO loss")
                 self.optimizer.zero_grad(set_to_none=True)
@@ -145,6 +155,7 @@ class PPOLearner:
                     ("approx_kl", approx_kl),
                     ("clip_fraction", clip_fraction),
                     ("grad_norm", grad_norm),
+                    ("auxiliary_loss", auxiliary),
                 ):
                     stats[name].append(float(value.detach()))
                 if self.config.target_kl is not None and approx_kl > self.config.target_kl:

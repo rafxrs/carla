@@ -1,4 +1,4 @@
-"""Synchronous MLP PPO with CSV journals, isolated validation and resumable collection."""
+"""Synchronous PPO with CSV journals, isolated validation and resumable collection."""
 
 import logging
 import time
@@ -22,6 +22,7 @@ from carla.rl.metrics import (
     EpisodeTracker,
     RolloutDiagnostics,
 )
+from carla.rl.opponents import bot_tables
 from carla.rl.ppo import PPOLearner
 from carla.rl.process_rollouts import SynchronousRolloutPool
 from carla.rl.rollout import collect_rollouts
@@ -49,19 +50,21 @@ def resolve_device(name: str) -> torch.device:
 
 
 def _validate(config: ExperimentConfig) -> None:
-    if config.model.encoder not in ("mlp", "gnn") or config.model.belief != "none":
-        raise ValueError("this baseline supports only feed-forward MLP/GNN policies without belief")
-    if config.model.trade_decoder == "transformer" or config.model.set_attention:
-        raise ValueError("this baseline does not support attention or transformer trade decoding")
+    if config.model.encoder not in ("mlp", "gnn"):
+        raise ValueError("model.encoder must be mlp or gnn")
+    if config.model.encoder == "mlp" and (
+        config.model.belief != "none" or config.model.set_attention
+    ):
+        raise ValueError("belief and set attention require model.encoder=gnn")
+    if config.model.belief not in ("none", "gru"):
+        raise ValueError("model.belief must be none or gru")
+    if config.model.trade_decoder == "transformer":
+        raise ValueError("transformer trade decoding is not implemented")
     if config.model.max_trade_cards_per_side < 1:
         raise ValueError("model.max_trade_cards_per_side must be positive")
     if config.runtime.num_workers <= 0 or config.runtime.envs_per_worker <= 0:
         raise ValueError("synchronous PPO requires positive workers and environments per worker")
-    if len(config.opponents.pool) != 1 or config.opponents.pool[0].kind not in (
-        "random",
-        "heuristic",
-    ):
-        raise ValueError("synchronous PPO requires one fixed random or heuristic opponent kind")
+    bot_tables(config.opponents, config.runtime.num_workers, config.runtime.envs_per_worker)
     if config.ppo.total_env_steps <= 0 or config.ppo.rollout_steps <= 0:
         raise ValueError("PPO step budgets must be positive")
     if config.ppo.epochs <= 0 or config.ppo.minibatch_size <= 0:
@@ -98,11 +101,10 @@ def train(
     device = resolve_device(config.runtime.device)
     policy = build_policy(config.model)
     learner = PPOLearner(policy, config.ppo, str(device))
-    opponent_kind = config.opponents.pool[0].kind
     envs = (
         [
-            CatanEnv(config.engine, config.env, [make_agent(opponent_kind) for _ in range(3)])
-            for _ in range(config.runtime.envs_per_worker)
+            CatanEnv(config.engine, config.env, [make_agent(kind) for kind in table])
+            for table in bot_tables(config.opponents, 1, config.runtime.envs_per_worker)[0]
         ]
         if config.runtime.num_workers == 1
         else []
