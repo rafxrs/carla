@@ -1,0 +1,7 @@
+# Stage 2 of the full model: start from a stage-1 checkpoint (trained against random bots) with
+# `carla train ... --init-from <checkpoint>` and train against three heuristic bots.
+extends: full_trade_own.yaml
+name: full_trade_own_heuristic
+opponents:
+  pool:
+    - kind: heuristic
