@@ -28,7 +28,7 @@ def main() -> int:
     parser.add_argument("--max-restarts", type=int, default=10)
     parser.add_argument("--init-from", help="first launch only: start from these policy weights")
     parser.add_argument("--resume", help="continue an existing run directory (or its latest.pt)")
-    args = parser.parse_args()
+    args = parser.parse_intermixed_args()  # overrides may follow --resume / --init-from
     output = [o.split("=", 1)[1] for o in args.overrides if o.startswith("runtime.output_dir=")]
     if not output:
         parser.error("pass runtime.output_dir=... so the run directory can be found again")
