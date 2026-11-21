@@ -1,0 +1,9 @@
+# Full model with potential-based shaping on own VP minus the top opponent's public VP (reward study).
+extends: full_trade.yaml
+name: full_trade_margin
+env:
+  shaping: margin
+  shaping_coef: 0.1
+  shaping_gamma: 0.999  # must equal ppo.gamma
+ppo:
+  gamma: 0.999

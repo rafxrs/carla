@@ -75,6 +75,8 @@ def _validate(config: ExperimentConfig) -> None:
         raise ValueError("torch_threads_per_worker must be positive")
     if not 0 <= config.ppo.gae_lambda <= 1 or not 0 <= config.ppo.gamma <= 1:
         raise ValueError("gamma and gae_lambda must be between zero and one")
+    if config.env.shaping != "none" and config.env.shaping_gamma != config.ppo.gamma:
+        raise ValueError("env.shaping_gamma must equal ppo.gamma for potential-based shaping")
     if config.eval.every_env_steps < 0 or config.eval.boards <= 0:
         raise ValueError("evaluation interval must be nonnegative and boards positive")
     if (

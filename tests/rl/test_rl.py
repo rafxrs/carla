@@ -147,6 +147,7 @@ def test_masked_entropy_has_finite_gradients():
         ("opponents.pool=[{kind: self}]", "random/heuristic with positive weight"),
         ("opponents.pool=[{kind: random, weight: 0}]", "random/heuristic with positive weight"),
         ("ppo.total_env_steps=0", "budgets must be positive"),
+        ("env.shaping=own", None),
     ],
 )
 def test_gnn_training_preserves_baseline_restrictions(override, message):
@@ -154,7 +155,10 @@ def test_gnn_training_preserves_baseline_restrictions(override, message):
     from carla.config import load_config
     from carla.rl.train import _validate
 
-    if message is None:  # the MLP encoder rejects the GNN-only belief and attention modules
+    if override.startswith("env.shaping"):
+        config = load_config("configs/gnn_smoke.yaml", [override, "env.shaping_gamma=0.9"])
+        message = "shaping_gamma must equal ppo.gamma"
+    elif message is None:  # the MLP encoder rejects the GNN-only belief and attention modules
         config = load_config(
             "configs/gnn_smoke.yaml", [override, "model.belief=gru", "model.set_attention=true"]
         )

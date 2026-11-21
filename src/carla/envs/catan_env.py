@@ -28,7 +28,7 @@ from carla.engine.rng import derive_seed
 from carla.engine.text import describe_state
 from carla.envs.action_space import HEAD_NAMES, HEAD_SIZES, decode_action, encode_action
 from carla.envs.observation import ObservationEncoder
-from carla.envs.rewards import public_victory_points, step_rewards
+from carla.envs.rewards import potential, public_victory_points, step_rewards
 
 
 @dataclass
@@ -162,6 +162,7 @@ class CatanEnv(gym.Env):
         self.action_space = _LegalActionSpace(self)
         self.learner = 0
         self._seat_agents: dict[int, Agent] = {}
+        self._potential = 0.0
 
     @property
     def game(self) -> Game:
@@ -178,6 +179,7 @@ class CatanEnv(gym.Env):
         for p, agent in self._seat_agents.items():
             agent.reset(self.game, p, derive_seed(game_seed, "seat", p))
         _, obs = self._play_opponents(0.0)
+        self._potential = potential(self.game, self.learner, self.config)
         return obs, self._info()
 
     def step(self, action):
@@ -185,6 +187,11 @@ class CatanEnv(gym.Env):
             raise RuntimeError("the episode is over; call reset()")
         result = self.aec.step(action)
         reward, obs = self._play_opponents(float(result.rewards[self.learner]))
+        if self.config.shaping != "none":
+            # F = gamma * Phi(s') - Phi(s) between consecutive learner decisions; Phi = 0 at the end.
+            next_potential = potential(self.game, self.learner, self.config)
+            reward += self.config.shaping_gamma * next_potential - self._potential
+            self._potential = next_potential
         over, truncated = self.game.is_over, self.game.is_truncated
         return obs, reward, over and not truncated, truncated, self._info()
 

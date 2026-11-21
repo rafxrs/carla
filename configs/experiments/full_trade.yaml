@@ -1,5 +1,6 @@
 # Full model: GNN + set attention + GRU belief + GRU trade decoder with multi-card domestic
-# offers, trained against mixed tables of two random bots and one heuristic bot.
+# offers, trained against three random bots (heuristic bots win every game before an
+# untrained agent scores, so they give no signal under the sparse reward).
 extends: gnn_attention_belief.yaml
 name: full_trade
 engine:
@@ -13,6 +14,3 @@ model:
 opponents:
   pool:
     - kind: random
-      weight: 2
-    - kind: heuristic
-      weight: 1
