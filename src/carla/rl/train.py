@@ -87,9 +87,34 @@ def _validate(config: ExperimentConfig) -> None:
         raise ValueError("evaluation opponents must be distinct random/heuristic bots")
 
 
+def _load_initial_weights(path: Path, policy, config: ExperimentConfig) -> None:
+    """Copy policy weights from another run's checkpoint into a fresh run.
+
+    Only the network is reused: the optimizer, counters, environments and journals start anew,
+    so the opponents, reward or PPO settings may differ (e.g. a curriculum stage). The model
+    architecture must match exactly.
+    """
+    data = torch.load(path, map_location="cpu", weights_only=False)
+    if data.get("config") is None:
+        raise ValueError(f"init checkpoint has no experiment config: {path}")
+    saved = to_dict(from_dict(ExperimentConfig, data["config"]))["model"]
+    if saved != to_dict(config)["model"]:
+        changed = sorted(k for k in saved if saved[k] != to_dict(config)["model"].get(k))
+        raise ValueError(f"init checkpoint model config differs: {', '.join(changed)}")
+    policy.load_state_dict(data["policy"])
+
+
 def train(
-    config: ExperimentConfig, resume: Path | None = None, *, run_dir: Path | None = None
+    config: ExperimentConfig,
+    resume: Path | None = None,
+    *,
+    run_dir: Path | None = None,
+    init_from: Path | None = None,
 ) -> Path:
+    """Train from scratch, resume a run (`resume`), or start a new run from another run's
+    policy weights (`init_from`)."""
+    if resume is not None and init_from is not None:
+        raise ValueError("use either resume or init_from, not both")
     _validate(config)
     seed_everything(config.seed, config.runtime.deterministic_torch)
     torch.set_num_threads(config.runtime.torch_threads_per_worker)
@@ -158,7 +183,10 @@ def train(
         learner.version = int(meta["counters"]["updates"])
         if config.ppo.total_env_steps < env_steps:
             raise ValueError("total_env_steps cannot be smaller than the restored decision count")
-    elif config.runtime.num_workers == 1:
+    if init_from is not None:
+        init_from = Path(init_from).resolve()
+        _load_initial_weights(init_from, policy, config)
+    if resume is None and config.runtime.num_workers == 1:
         observations = [
             env.reset(
                 seed=(
@@ -181,7 +209,7 @@ def train(
         )
     }
     save_config(config, run_dir / "config.yaml")
-    metadata = record_session(run_dir, str(device), resume=resume)
+    metadata = record_session(run_dir, str(device), resume=resume, init_from=init_from)
     training_seconds = state.get("training_seconds", 0.0)
     evaluation_seconds = state.get("evaluation_seconds", 0.0)
     previous_wall = state.get("wall_seconds", 0.0)
@@ -269,6 +297,8 @@ def train(
         log.info("run directory %s (learner device %s)", run_dir, device)
         if resume is not None:
             log.info("resumed update %d at %d learner decisions", learner.version, env_steps)
+        if init_from is not None:
+            log.info("initialized policy weights from %s", init_from)
         if config.runtime.num_workers > 1:
             pool = SynchronousRolloutPool(config, saved_workers)
         # An untrained evaluation makes the starting performance visible on every curve.

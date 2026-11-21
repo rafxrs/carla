@@ -26,6 +26,8 @@ def main() -> int:
     parser.add_argument("config")
     parser.add_argument("overrides", nargs="*")
     parser.add_argument("--max-restarts", type=int, default=10)
+    parser.add_argument("--init-from", help="first launch only: start from these policy weights")
+    parser.add_argument("--resume", help="continue an existing run directory (or its latest.pt)")
     args = parser.parse_args()
     output = [o.split("=", 1)[1] for o in args.overrides if o.startswith("runtime.output_dir=")]
     if not output:
@@ -36,10 +38,18 @@ def main() -> int:
     command = [sys.executable, "-m", "carla.cli", "train", args.config]
     started = time.time()
     run_dir: Path | None = None
+    if args.resume:
+        run_dir = Path(args.resume)
+        run_dir = run_dir.parent if run_dir.is_file() else run_dir
+        if not (run_dir / "latest.pt").exists():
+            parser.error(f"no latest.pt in {run_dir}")
     failures, last_size = 0, -1
     while True:
         latest = run_dir / "latest.pt" if run_dir is not None else None
-        resume = ["--resume", str(latest)] if latest is not None and latest.exists() else []
+        if latest is not None and latest.exists():
+            resume = ["--resume", str(latest)]
+        else:
+            resume = ["--init-from", args.init_from] if args.init_from else []
         code = subprocess.call([*command, *resume, *args.overrides])
         if code == 0:
             return 0
