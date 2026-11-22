@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -146,9 +147,9 @@ def test_train_resume_and_evaluate(tmp_path, capsys, encoder):
     )
     (reference_run,) = uninterrupted.iterdir()
     reference = torch.load(reference_run / "latest.pt", weights_only=False)
-    assert all(
-        torch.equal(value, reference["policy"][name]) for name, value in second["policy"].items()
-    )
+    # GNN scatter-adds on CUDA are not bitwise deterministic; allow float rounding noise.
+    for name, value in second["policy"].items():
+        torch.testing.assert_close(value, reference["policy"][name], rtol=1e-5, atol=1e-5)
 
 
 def test_batched_training_exact_budget_and_resume(tmp_path):
@@ -292,3 +293,70 @@ def test_gui_picks_a_random_seed_unless_one_is_given(gui_calls, capsys):
     assert first.seed != second.seed and f"seed {first.seed}" in capsys.readouterr().out
     assert main(["gui", "--seed", "5"]) == 0 and gui_calls[-1].seed == 5
     assert main(["gui", "--config", "configs/bots.yaml"]) == 0 and gui_calls[-1].seed == 0
+
+
+def test_train_init_from_starts_a_new_run_from_checkpoint_weights(tmp_path):
+    torch = pytest.importorskip("torch")
+    from carla.config import load_config
+    from carla.models import build_policy
+    from carla.rl.train import _load_initial_weights
+
+    overrides = [
+        "ppo.epochs=1",
+        "ppo.rollout_steps=8",
+        "ppo.total_env_steps=8",
+        "model.hidden_dim=16",
+        "model.mlp_layers=1",
+        "engine.max_turns=12",
+        "runtime.device=cpu",
+    ]
+    first = tmp_path / "first"
+    assert main(["train", "configs/smoke.yaml", *overrides, f"runtime.output_dir={first}"]) == 0
+    (source,) = first.iterdir()
+    checkpoint = source / "latest.pt"
+
+    config = load_config("configs/smoke.yaml", overrides)
+    policy = build_policy(config.model)
+    _load_initial_weights(checkpoint, policy, config)
+    saved = torch.load(checkpoint, map_location="cpu", weights_only=False)["policy"]
+    assert all(torch.equal(value, saved[name]) for name, value in policy.state_dict().items())
+
+    # A new stage may change opponents and reward, but not the architecture.
+    second = tmp_path / "second"
+    stage = [*overrides, "opponents.pool=[{kind: heuristic}]", "env.vp_reward=0.1"]
+    assert (
+        main(
+            [
+                "train",
+                "configs/smoke.yaml",
+                "--init-from",
+                str(checkpoint),
+                *stage,
+                f"runtime.output_dir={second}",
+            ]
+        )
+        == 0
+    )
+    (run,) = second.iterdir()
+    assert run != source
+    resumed = torch.load(run / "latest.pt", weights_only=False)
+    assert resumed["counters"] == {"env_steps": 8, "updates": 1}
+    metadata = json.loads((run / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["sessions"][-1]["init_from"] == str(checkpoint.resolve())
+    assert "initialized policy weights" in (run / "train.log").read_text(encoding="utf-8")
+
+    with pytest.raises(ValueError, match="model config differs: hidden_dim"):
+        _load_initial_weights(
+            checkpoint, policy, load_config("configs/smoke.yaml", ["model.hidden_dim=32"])
+        )
+    with pytest.raises(ValueError, match="either resume or init_from"):
+        main(
+            [
+                "train",
+                "configs/smoke.yaml",
+                "--resume",
+                str(checkpoint),
+                "--init-from",
+                str(checkpoint),
+            ]
+        )

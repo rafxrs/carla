@@ -13,13 +13,25 @@ def public_victory_points(game: Game) -> np.ndarray:
     )
 
 
+def potential(game: Game, seat: int, config: EnvConfig) -> float:
+    """Shaping potential of `seat` (see `EnvConfig.shaping`); 0 when disabled or game over."""
+    if config.shaping == "none" or game.is_over:
+        return 0.0
+    own = game.victory_points(seat, include_hidden=True)
+    if config.shaping == "margin":
+        own -= max(
+            game.victory_points(p, include_hidden=False) for p in range(NUM_PLAYERS) if p != seat
+        )
+    return config.shaping_coef * own
+
+
 def step_rewards(vp_before: np.ndarray | None, game: Game, config: EnvConfig) -> np.ndarray:
     """Rewards of all seats for the step just applied to `game`.
 
     Terminal: `win_reward` for the winner and `loss_reward` for the others, or
     `truncation_reward` for everyone at the turn limit. Shaping: `vp_reward` per public victory
     point gained (needs `vp_before`, the public points before the step).
-    TODO(rl): try potential-based shaping (e.g. on production pips) and compare in ablations.
+    Potential-based shaping between a learner's decisions lives in `CatanEnv` (`potential`).
     """
     rewards = np.zeros(NUM_PLAYERS, dtype=np.float32)
     if config.vp_reward and vp_before is not None:

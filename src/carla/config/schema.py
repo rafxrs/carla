@@ -19,6 +19,14 @@ class EnvConfig:
     truncation_reward: float = 0.0
     vp_reward: float = 0.0
     """Shaping: reward per public victory point gained (0 disables)."""
+    shaping: Literal["none", "own", "margin"] = "none"
+    """Potential-based shaping in `CatanEnv`: F = gamma * Phi(s') - Phi(s) between consecutive
+    learner decisions, with Phi = 0 once the game is over, so the optimal policy is unchanged.
+    own: Phi = shaping_coef * own VP (own hidden VP cards included); margin: Phi = shaping_coef *
+    (own VP - the top opponent's public VP)."""
+    shaping_coef: float = 0.1
+    shaping_gamma: float = 0.999
+    """Discount used by the shaping; must equal `ppo.gamma` to keep the optimal policy."""
     max_events: int = 64
     """Event-stream slots per observation (belief module input); older events are dropped."""
 

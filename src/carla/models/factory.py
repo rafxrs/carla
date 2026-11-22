@@ -7,11 +7,16 @@ from carla.models.mlp import MLPPolicy
 
 
 def build_policy(config: ModelConfig) -> PolicyNetwork:
-    """Build either board encoder with optional GRU trade decoding."""
-    if config.belief != "none" or config.set_attention or config.trade_decoder == "transformer":
-        raise NotImplementedError(
-            "belief, set attention, and transformer trade decoding are not implemented"
-        )
+    """Build either board encoder with optional GRU trade decoding.
+
+    Set attention and the belief GRU are implemented for the GNN encoder only.
+    """
+    if config.trade_decoder == "transformer":
+        raise NotImplementedError("transformer trade decoding is not implemented")
+    if config.belief == "lstm":
+        raise NotImplementedError("only the GRU belief module is implemented")
+    if config.encoder == "mlp" and (config.belief != "none" or config.set_attention):
+        raise NotImplementedError("belief and set attention require model.encoder=gnn")
     if config.max_trade_cards_per_side < 1:
         raise ValueError("model.max_trade_cards_per_side must be positive")
     if config.encoder == "mlp":

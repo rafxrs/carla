@@ -27,6 +27,7 @@ PPO_FIELDS = (
     "approx_kl",
     "clip_fraction",
     "grad_norm",
+    "auxiliary_loss",
     "explained_variance",
     "epochs_stopped_early",
     "optimizer_steps",

@@ -38,6 +38,11 @@ def main(argv: list[str] | None = None) -> int:
     p = commands.add_parser("train", help="train a synchronous MLP/GNN PPO baseline")
     p.add_argument("config", type=Path)
     p.add_argument("--resume", type=Path, help="resume from a training checkpoint")
+    p.add_argument(
+        "--init-from",
+        type=Path,
+        help="start a new run from another run's policy weights (fresh optimizer and counters)",
+    )
     p.add_argument("overrides", nargs="*", help="dotted overrides, e.g. ppo.learning_rate=1e-4")
 
     p = commands.add_parser("evaluate", help="evaluate a checkpoint with seat rotation")
@@ -209,7 +214,7 @@ def _tournament(args) -> int:
 def _train(args) -> int:
     from carla.rl.train import train
 
-    train(load_config(args.config, args.overrides), resume=args.resume)
+    train(load_config(args.config, args.overrides), resume=args.resume, init_from=args.init_from)
     return 0
 
 

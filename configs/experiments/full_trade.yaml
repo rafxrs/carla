@@ -1,7 +1,16 @@
-# Planned combination: GNN and GRU trade decoder work; attention and belief remain TODOs.
+# Full model: GNN + set attention + GRU belief + GRU trade decoder with multi-card domestic
+# offers, trained against three random bots (heuristic bots win every game before an
+# untrained agent scores, so they give no signal under the sparse reward).
 extends: gnn_attention_belief.yaml
 name: full_trade
 engine:
   allow_domestic_trade: true
+  max_trade_proposals_per_turn: 3
+  max_domestic_trades_per_turn: 3
+  max_trade_cards_per_side: 4
 model:
   trade_decoder: gru
+  max_trade_cards_per_side: 4
+opponents:
+  pool:
+    - kind: random

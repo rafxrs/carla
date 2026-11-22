@@ -44,8 +44,8 @@ def evaluate_policy(
     """Each held-out board is played in all four seats; RNG and module modes are restored."""
     if opponent not in ("random", "heuristic") or boards <= 0:
         raise ValueError("evaluation needs random/heuristic opponents and positive boards")
-    if config.model.encoder not in ("mlp", "gnn") or config.model.belief != "none":
-        raise ValueError("this evaluator supports feed-forward MLP/GNN policies only")
+    if config.model.encoder not in ("mlp", "gnn"):
+        raise ValueError("this evaluator supports MLP/GNN policies only")
     modes = [(module, module.training) for module in policy.modules()]
     device = next(policy.parameters()).device
     records = []
@@ -63,12 +63,13 @@ def evaluate_policy(
                     try:
                         obs, _ = env.reset(seed=game_seed)
                         done, reward_sum, decisions = False, 0.0, 0
+                        state = policy.initial_state(1, device)
                         while not done:
                             batch = batch_observations([obs], device=device)
-                            heads = (
-                                policy(batch)
-                                .distribution(batch["masks"])
-                                .sample(deterministic=deterministic)
+                            out = policy(batch, state)
+                            state = out.state
+                            heads = out.distribution(batch["masks"]).sample(
+                                deterministic=deterministic
                             )
                             obs, reward, terminated, truncated, info = env.step(
                                 heads[0].cpu().numpy()

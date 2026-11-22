@@ -12,7 +12,9 @@ from carla.config.schema import ExperimentConfig
 from carla.utils.logging import write_json
 
 
-def record_session(path: Path, device: str, *, resume: Path | None = None) -> dict:
+def record_session(
+    path: Path, device: str, *, resume: Path | None = None, init_from: Path | None = None
+) -> dict:
     """Append machine/software provenance, including when a run moves to another laptop."""
     import json
 
@@ -37,6 +39,7 @@ def record_session(path: Path, device: str, *, resume: Path | None = None) -> di
         "packages": packages,
         "git": _git_version().strip(),
         "resume": str(resume) if resume else None,
+        "init_from": str(init_from) if init_from else None,
     }
     if device.startswith("cuda"):
         import torch

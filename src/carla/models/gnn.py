@@ -18,13 +18,17 @@ from carla.envs.action_space import MASK_SHAPES
 from carla.envs.observation import (
     CORNER_FEATURES,
     EDGE_FEATURES,
+    EVENT_FEATURES,
     GLOBAL_FEATURES,
     PLAYER_FEATURES,
     TILE_FEATURES,
+    TRADE_BASE_FEATURES,
     TRADE_FEATURES,
 )
-from carla.models.base import PolicyNetwork, PolicyOutput
+from carla.models.base import STATE_KEY, TARGET_KEY, PolicyNetwork, PolicyOutput
+from carla.models.belief import BeliefModule, belief_loss
 from carla.models.graph import board_graph
+from carla.models.set_attention import SetAttentionPool
 from carla.models.trade_decoder import TradeDecoder
 
 NON_BOARD_KEYS = ("players", "hand", "dev_cards", "globals", "trade_context")
@@ -36,6 +40,50 @@ NON_BOARD_SIZE = (
     + TRADE_FEATURES
 )
 _SPATIAL_HEADS = ("settlement", "city", "road", "robber")
+
+# Set attention replaces the flat players, dev cards and per-seat trade responses.
+_ACCEPT = slice(2 * NUM_RESOURCES, 2 * NUM_RESOURCES + NUM_PLAYERS)
+_COUNTEROFFERS = slice(TRADE_BASE_FEATURES, TRADE_FEATURES)
+SEAT_ELEMENT_FEATURES = PLAYER_FEATURES + 1 + 2 * NUM_RESOURCES + NUM_PLAYERS
+DEV_ELEMENT_FEATURES = NUM_DEV_CARD_TYPES + 2
+SET_FLAT_SIZE = NUM_RESOURCES + GLOBAL_FEATURES + TRADE_BASE_FEATURES - NUM_PLAYERS
+
+
+def _seat_elements(obs: dict[str, Tensor]) -> Tensor:
+    """(B, 4, SEAT_ELEMENT_FEATURES): stats, trade response, counteroffer, relative seat."""
+    batch = obs["players"].shape[0]
+    trade = obs["trade_context"].float()
+    seats = torch.eye(NUM_PLAYERS, device=trade.device).expand(batch, -1, -1)
+    return torch.cat(
+        (
+            obs["players"].float(),
+            trade[:, _ACCEPT, None],
+            trade[:, _COUNTEROFFERS].reshape(batch, NUM_PLAYERS, 2 * NUM_RESOURCES),
+            seats,
+        ),
+        dim=-1,
+    )
+
+
+def _dev_elements(obs: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
+    """(B, 5, DEV_ELEMENT_FEATURES) card types with held/playable features, and held mask."""
+    batch = obs["dev_cards"].shape[0]
+    dev = obs["dev_cards"].float().reshape(batch, 2, NUM_DEV_CARD_TYPES).transpose(1, 2)
+    types = torch.eye(NUM_DEV_CARD_TYPES, device=dev.device).expand(batch, -1, -1)
+    return torch.cat((types, dev), dim=-1), (dev > 0).any(dim=-1)
+
+
+def _set_flat(obs: dict[str, Tensor]) -> Tensor:
+    trade = obs["trade_context"].float()
+    return torch.cat(
+        (
+            obs["hand"].float(),
+            obs["globals"].float(),
+            trade[:, : _ACCEPT.start],
+            trade[:, _ACCEPT.stop : TRADE_BASE_FEATURES],
+        ),
+        dim=-1,
+    )
 
 
 def _mlp(input_dim: int, hidden_dim: int) -> nn.Sequential:
@@ -120,7 +168,9 @@ class GNNPolicy(PolicyNetwork):
     With `gnn_tile_nodes=False`, projected tile features are mean-folded into corners once;
     tiles skip recurrent message updates and are read out from their own projection plus
     their six encoded corners. Per-tile information is retained for pooling and robber logits.
-    Event history is unused, matching the feed-forward MLP baseline.
+    Without a belief module the event history is unused, matching the MLP baseline. With
+    `model.belief`, a GRU folds the event stream into a state carried across decisions; with
+    `model.set_attention`, seats and development cards are pooled by set attention.
     """
 
     def __init__(self, config: ModelConfig) -> None:
@@ -164,8 +214,25 @@ class GNNPolicy(PolicyNetwork):
         self.layers = nn.ModuleList(
             MessagePassingLayer(hidden, self.tile_nodes) for _ in range(config.gnn_layers)
         )
+        self.set_attention = config.set_attention
+        context_inputs = 3 * hidden + NON_BOARD_SIZE
+        if self.set_attention:
+            self.seat_input = nn.Sequential(nn.Linear(SEAT_ELEMENT_FEATURES, hidden), nn.ReLU())
+            self.dev_input = nn.Sequential(nn.Linear(DEV_ELEMENT_FEATURES, hidden), nn.ReLU())
+            self.seat_pool = SetAttentionPool(hidden, config.attention_heads)
+            self.dev_pool = SetAttentionPool(hidden, config.attention_heads)
+            context_inputs = 5 * hidden + SET_FLAT_SIZE
+        self.belief = (
+            BeliefModule(EVENT_FEATURES, config.belief_dim, config.belief)
+            if config.belief != "none"
+            else None
+        )
+        self.belief_loss_coef = config.belief_loss_coef
+        if self.belief is not None:
+            self.state_dim = config.belief_dim
+            context_inputs += config.belief_dim
         self.context = nn.Sequential(
-            nn.Linear(3 * hidden + NON_BOARD_SIZE, hidden),
+            nn.Linear(context_inputs, hidden),
             nn.ReLU(),
             nn.Linear(hidden, hidden),
             nn.ReLU(),
@@ -210,7 +277,21 @@ class GNNPolicy(PolicyNetwork):
             tiles = self.tile_norm(tiles + self.tile_readout(torch.cat((tiles, adjacent), dim=-1)))
 
         pooled = [entities.mean(dim=1) for entities in (corners, edges, tiles)]  # 3 * (B, H)
-        extra = [obs[key].reshape(batch, -1).float() for key in NON_BOARD_KEYS]
+        if self.set_attention:
+            seats = self.seat_pool(
+                self.seat_input(_seat_elements(obs)),
+                torch.ones(batch, NUM_PLAYERS, dtype=torch.bool, device=corners.device),
+            )
+            dev_elements, dev_mask = _dev_elements(obs)
+            extra = [seats, self.dev_pool(self.dev_input(dev_elements), dev_mask), _set_flat(obs)]
+        else:
+            extra = [obs[key].reshape(batch, -1).float() for key in NON_BOARD_KEYS]
+        new_state, belief = None, None
+        if self.belief is not None:
+            if state is None and STATE_KEY in obs:
+                state = obs[STATE_KEY].float()
+            features, belief, new_state = self.belief(obs["events"], obs["event_mask"], state)
+            extra.append(features)
         context = self.context(torch.cat((*pooled, *extra), dim=-1))  # (B, H)
         spatial = {"settlement": corners, "city": corners, "road": edges, "robber": tiles}
         logits = {
@@ -224,8 +305,16 @@ class GNNPolicy(PolicyNetwork):
         return PolicyOutput(
             logits=logits,
             value=self.value(context).squeeze(1),
+            state=new_state,
+            belief=belief,
             trade_decoder=self.trade_decoder,
             trade_context=context if self.trade_decoder is not None else None,
             trade_hand=obs["own_hand_counts"] if self.trade_decoder is not None else None,
             trade_limit=obs["trade_card_limit"] if self.trade_decoder is not None else None,
         )
+
+    def auxiliary_loss(self, output: PolicyOutput, obs: dict[str, Tensor]) -> Tensor | None:
+        if output.belief is None or TARGET_KEY not in obs or not self.belief_loss_coef:
+            return None
+        targets: dict[str, Tensor] = obs[TARGET_KEY]  # type: ignore[assignment]  # nested dict
+        return self.belief_loss_coef * belief_loss(output.belief, targets)

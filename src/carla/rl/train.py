@@ -1,4 +1,4 @@
-"""Synchronous MLP PPO with CSV journals, isolated validation and resumable collection."""
+"""Synchronous PPO with CSV journals, isolated validation and resumable collection."""
 
 import logging
 import time
@@ -22,6 +22,7 @@ from carla.rl.metrics import (
     EpisodeTracker,
     RolloutDiagnostics,
 )
+from carla.rl.opponents import bot_tables
 from carla.rl.ppo import PPOLearner
 from carla.rl.process_rollouts import SynchronousRolloutPool
 from carla.rl.rollout import collect_rollouts
@@ -49,19 +50,21 @@ def resolve_device(name: str) -> torch.device:
 
 
 def _validate(config: ExperimentConfig) -> None:
-    if config.model.encoder not in ("mlp", "gnn") or config.model.belief != "none":
-        raise ValueError("this baseline supports only feed-forward MLP/GNN policies without belief")
-    if config.model.trade_decoder == "transformer" or config.model.set_attention:
-        raise ValueError("this baseline does not support attention or transformer trade decoding")
+    if config.model.encoder not in ("mlp", "gnn"):
+        raise ValueError("model.encoder must be mlp or gnn")
+    if config.model.encoder == "mlp" and (
+        config.model.belief != "none" or config.model.set_attention
+    ):
+        raise ValueError("belief and set attention require model.encoder=gnn")
+    if config.model.belief not in ("none", "gru"):
+        raise ValueError("model.belief must be none or gru")
+    if config.model.trade_decoder == "transformer":
+        raise ValueError("transformer trade decoding is not implemented")
     if config.model.max_trade_cards_per_side < 1:
         raise ValueError("model.max_trade_cards_per_side must be positive")
     if config.runtime.num_workers <= 0 or config.runtime.envs_per_worker <= 0:
         raise ValueError("synchronous PPO requires positive workers and environments per worker")
-    if len(config.opponents.pool) != 1 or config.opponents.pool[0].kind not in (
-        "random",
-        "heuristic",
-    ):
-        raise ValueError("synchronous PPO requires one fixed random or heuristic opponent kind")
+    bot_tables(config.opponents, config.runtime.num_workers, config.runtime.envs_per_worker)
     if config.ppo.total_env_steps <= 0 or config.ppo.rollout_steps <= 0:
         raise ValueError("PPO step budgets must be positive")
     if config.ppo.epochs <= 0 or config.ppo.minibatch_size <= 0:
@@ -72,6 +75,8 @@ def _validate(config: ExperimentConfig) -> None:
         raise ValueError("torch_threads_per_worker must be positive")
     if not 0 <= config.ppo.gae_lambda <= 1 or not 0 <= config.ppo.gamma <= 1:
         raise ValueError("gamma and gae_lambda must be between zero and one")
+    if config.env.shaping != "none" and config.env.shaping_gamma != config.ppo.gamma:
+        raise ValueError("env.shaping_gamma must equal ppo.gamma for potential-based shaping")
     if config.eval.every_env_steps < 0 or config.eval.boards <= 0:
         raise ValueError("evaluation interval must be nonnegative and boards positive")
     if (
@@ -82,9 +87,34 @@ def _validate(config: ExperimentConfig) -> None:
         raise ValueError("evaluation opponents must be distinct random/heuristic bots")
 
 
+def _load_initial_weights(path: Path, policy, config: ExperimentConfig) -> None:
+    """Copy policy weights from another run's checkpoint into a fresh run.
+
+    Only the network is reused: the optimizer, counters, environments and journals start anew,
+    so the opponents, reward or PPO settings may differ (e.g. a curriculum stage). The model
+    architecture must match exactly.
+    """
+    data = torch.load(path, map_location="cpu", weights_only=False)
+    if data.get("config") is None:
+        raise ValueError(f"init checkpoint has no experiment config: {path}")
+    saved = to_dict(from_dict(ExperimentConfig, data["config"]))["model"]
+    if saved != to_dict(config)["model"]:
+        changed = sorted(k for k in saved if saved[k] != to_dict(config)["model"].get(k))
+        raise ValueError(f"init checkpoint model config differs: {', '.join(changed)}")
+    policy.load_state_dict(data["policy"])
+
+
 def train(
-    config: ExperimentConfig, resume: Path | None = None, *, run_dir: Path | None = None
+    config: ExperimentConfig,
+    resume: Path | None = None,
+    *,
+    run_dir: Path | None = None,
+    init_from: Path | None = None,
 ) -> Path:
+    """Train from scratch, resume a run (`resume`), or start a new run from another run's
+    policy weights (`init_from`)."""
+    if resume is not None and init_from is not None:
+        raise ValueError("use either resume or init_from, not both")
     _validate(config)
     seed_everything(config.seed, config.runtime.deterministic_torch)
     torch.set_num_threads(config.runtime.torch_threads_per_worker)
@@ -98,11 +128,10 @@ def train(
     device = resolve_device(config.runtime.device)
     policy = build_policy(config.model)
     learner = PPOLearner(policy, config.ppo, str(device))
-    opponent_kind = config.opponents.pool[0].kind
     envs = (
         [
-            CatanEnv(config.engine, config.env, [make_agent(opponent_kind) for _ in range(3)])
-            for _ in range(config.runtime.envs_per_worker)
+            CatanEnv(config.engine, config.env, [make_agent(kind) for kind in table])
+            for table in bot_tables(config.opponents, 1, config.runtime.envs_per_worker)[0]
         ]
         if config.runtime.num_workers == 1
         else []
@@ -154,7 +183,10 @@ def train(
         learner.version = int(meta["counters"]["updates"])
         if config.ppo.total_env_steps < env_steps:
             raise ValueError("total_env_steps cannot be smaller than the restored decision count")
-    elif config.runtime.num_workers == 1:
+    if init_from is not None:
+        init_from = Path(init_from).resolve()
+        _load_initial_weights(init_from, policy, config)
+    if resume is None and config.runtime.num_workers == 1:
         observations = [
             env.reset(
                 seed=(
@@ -177,7 +209,7 @@ def train(
         )
     }
     save_config(config, run_dir / "config.yaml")
-    metadata = record_session(run_dir, str(device), resume=resume)
+    metadata = record_session(run_dir, str(device), resume=resume, init_from=init_from)
     training_seconds = state.get("training_seconds", 0.0)
     evaluation_seconds = state.get("evaluation_seconds", 0.0)
     previous_wall = state.get("wall_seconds", 0.0)
@@ -265,6 +297,8 @@ def train(
         log.info("run directory %s (learner device %s)", run_dir, device)
         if resume is not None:
             log.info("resumed update %d at %d learner decisions", learner.version, env_steps)
+        if init_from is not None:
+            log.info("initialized policy weights from %s", init_from)
         if config.runtime.num_workers > 1:
             pool = SynchronousRolloutPool(config, saved_workers)
         # An untrained evaluation makes the starting performance visible on every curve.

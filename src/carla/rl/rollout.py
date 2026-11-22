@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 from carla.envs.catan_env import CatanEnv
-from carla.models.base import PolicyNetwork, batch_observations
+from carla.models.base import TARGET_KEY, PolicyNetwork, batch_observations, with_state
 from carla.rl.buffer import RolloutBatch
 from carla.rl.metrics import EpisodeTracker, RolloutDiagnostics
 
@@ -31,7 +31,11 @@ def collect_rollouts(
     env_steps: int = 0,
     env_id_offset: int = 0,
 ) -> tuple[list[RolloutBatch], list[dict]]:
-    """Collect `num_steps` decisions per env, retaining independent episode boundaries."""
+    """Collect `num_steps` decisions per env, retaining independent episode boundaries.
+
+    Recurrent policies carry their state inside the returned observations (see `with_state`),
+    and every stored observation also holds the belief targets (`TARGET_KEY`).
+    """
     if not envs or num_steps <= 0:
         raise ValueError("need at least one environment and a positive num_steps")
     if observations is not None and len(observations) != len(envs):
@@ -40,6 +44,7 @@ def collect_rollouts(
         raise ValueError("episode_seeds must match environments")
     if trackers is not None and len(trackers) != len(envs):
         raise ValueError("trackers must match environments")
+    recurrent = policy.recurrent
     current = (
         list(observations)
         if observations is not None
@@ -48,6 +53,11 @@ def collect_rollouts(
             for i, env in enumerate(envs)
         ]
     )
+    if recurrent:
+        current = [
+            with_state(policy, _with_target(obs, env))
+            for obs, env in zip(current, envs, strict=True)
+        ]
     device = next(policy.parameters()).device
     policy.eval()
     n = len(envs)
@@ -67,6 +77,7 @@ def collect_rollouts(
             diagnostics.observe(dist, batch, heads)
         head_arrays = heads.cpu().numpy()
         value_arrays = out.value.cpu().numpy()
+        next_states = out.state.cpu().numpy() if out.state is not None else None
         for i, env in enumerate(envs):
             steps[i].append(current[i])
             actions[i].append(head_arrays[i])
@@ -82,7 +93,14 @@ def collect_rollouts(
                     episode_records.append(record)
             rewards[i].append(reward)
             dones[i].append(done)
-            current[i] = env.reset()[0] if done else obs
+            if done:
+                obs = env.reset()[0]
+            if recurrent:
+                obs = _with_target(obs, env)
+                obs = with_state(
+                    policy, obs, None if done or next_states is None else next_states[i]
+                )
+            current[i] = obs
     last_values = policy(batch_observations(current, device=device)).value.cpu().numpy()
     batches = [
         RolloutBatch(
@@ -119,6 +137,11 @@ def collect_rollout(
         policy_version=policy_version,
     )
     return batches[0], observations[0]
+
+
+def _with_target(obs: dict, env: CatanEnv) -> dict:
+    """Attach the opponents' hidden cards at this decision (belief targets, training only)."""
+    return {**obs, TARGET_KEY: env.aec.hidden_truth(env.learner)}
 
 
 def _to_numpy(tree: dict) -> dict:
