@@ -1,0 +1,15 @@
+# Full model with stationary strategic potential shaping (reward study).
+extends: full_trade.yaml
+name: full_trade_strategic
+model:
+  hidden_dim: 256
+env:
+  win_reward: 1.0
+  loss_reward: -1.0
+  truncation_reward: 0.0
+  vp_reward: 0.0
+  shaping: strategic
+  shaping_coef: 0.5
+  shaping_gamma: 0.999  # must equal ppo.gamma
+ppo:
+  gamma: 0.999

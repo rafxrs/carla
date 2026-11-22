@@ -9,7 +9,9 @@ from carla.envs import CatanEnv
 from carla.envs.rewards import potential
 
 
-def _play(shaping: Literal["none", "own", "margin"], seed: int = 3, gamma: float = 0.999):
+def _play(
+    shaping: Literal["none", "own", "margin", "strategic"], seed: int = 3, gamma: float = 0.999
+):
     env = CatanEnv(
         EngineConfig(max_turns=200),
         EnvConfig(learner_seat=0, shaping=shaping, shaping_coef=0.1, shaping_gamma=gamma),
@@ -26,9 +28,9 @@ def _play(shaping: Literal["none", "own", "margin"], seed: int = 3, gamma: float
     return env, np.asarray(rewards), np.asarray(potentials)
 
 
-@pytest.mark.parametrize("shaping", ["own", "margin"])
+@pytest.mark.parametrize("shaping", ["own", "margin", "strategic"])
 def test_shaping_is_gamma_potential_difference_and_zero_at_the_end(
-    shaping: Literal["own", "margin"],
+    shaping: Literal["own", "margin", "strategic"],
 ):
     _, shaped, phi = _play(shaping)
     _, sparse, _ = _play("none")
