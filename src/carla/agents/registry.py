@@ -11,10 +11,18 @@ AGENTS: dict[str, Callable[[], Agent]] = {
     "random_flat": lambda: RandomAgent(by_type=False),
     "heuristic": HeuristicAgent,
 }
-"""TODO(eval): register trained policies, e.g. "ppo:<checkpoint path>"."""
+"""Trained checkpoints are agents too: "ppo:<checkpoint path>" (see `policy_agent`)."""
+
+
+def is_agent_name(name: str) -> bool:
+    return name in AGENTS or (name.startswith("ppo:") and len(name) > 4)
 
 
 def make_agent(name: str) -> Agent:
+    if name.startswith("ppo:"):
+        from carla.agents.policy_agent import PolicyAgent  # Imports torch; bots stay light.
+
+        return PolicyAgent(name.removeprefix("ppo:"))
     try:
         factory = AGENTS[name]
     except KeyError:

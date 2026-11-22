@@ -84,8 +84,8 @@ def main(argv: list[str] | None = None) -> int:
         type=_agent_names,
         default=(),
         metavar="A,B,...",
-        help="bots for the other seats (all four with --watch), cycled "
-        "(default: heuristic; eval.agents with --watch)",
+        help="bots for the other seats (all four with --watch), cycled; ppo:<checkpoint.pt> "
+        "plays a trained policy (default: heuristic; eval.agents with --watch)",
     )
     p.add_argument(
         "--seed",
@@ -269,12 +269,16 @@ def _config(args) -> int:
 
 
 def _agent_names(text: str) -> tuple[str, ...]:
-    from carla.agents import AGENTS
+    from carla.agents import AGENTS, is_agent_name
 
     names = tuple(name.strip() for name in text.split(",") if name.strip())
-    unknown = [name for name in names if name not in AGENTS]
+    unknown = [name for name in names if not is_agent_name(name)]
     if not names or unknown:
-        raise argparse.ArgumentTypeError(f"unknown agents {unknown}; known: {sorted(AGENTS)}")
+        known = [*sorted(AGENTS), "ppo:<checkpoint.pt>"]
+        raise argparse.ArgumentTypeError(f"unknown agents {unknown}; known: {known}")
+    missing = [n for n in names if n.startswith("ppo:") and not Path(n[4:]).is_file()]
+    if missing:
+        raise argparse.ArgumentTypeError(f"checkpoint not found: {missing}")
     return names
 
 
@@ -299,14 +303,30 @@ def _gui(args) -> int:
     config = load_config(args.config, overrides)
     mode = "replay" if args.record is not None else "watch" if args.watch else "play"
     default = config.eval.agents if mode == "watch" else ("heuristic",)
+    opponents = args.opponents or default
+    engine = config.engine
+    checkpoints = [name[4:] for name in opponents if name.startswith("ppo:")]
+    if checkpoints and mode != "replay":
+        from carla.agents.policy_agent import load_checkpoint
+
+        trained = [load_checkpoint(path)[0].engine for path in checkpoints]
+        if args.config is None and not args.overrides and args.trading:
+            engine = trained[0]  # Play by the rules the policy was trained with.
+        if any(rules != engine for rules in trained):
+            print(
+                "carla gui: the checkpoint was trained with other engine rules; pass its "
+                "experiment config with --config (and no rule overrides)",
+                file=sys.stderr,
+            )
+            return 2
     options = GuiOptions(
         mode=mode,
         record=args.record,
         seat=args.seat,
-        opponents=args.opponents or default,
+        opponents=opponents,
         delay=args.delay,
         seed=config.seed,
-        engine=config.engine,
+        engine=engine,
         output_dir=Path(config.runtime.output_dir),
     )
     try:
