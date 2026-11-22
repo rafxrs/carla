@@ -31,6 +31,16 @@ class PolicyEvaluation:
     records: list[dict] = field(default_factory=list)
 
 
+@dataclass
+class _ActiveGame:
+    env: CatanEnv
+    obs: dict
+    board: int
+    seat: int
+    reward_sum: float = 0.0
+    learner_decisions: int = 0
+
+
 @torch.no_grad()
 def evaluate_policy(
     policy,
@@ -40,10 +50,17 @@ def evaluate_policy(
     boards: int = 10,
     seed: int = 10_000,
     deterministic: bool = True,
+    batch_games: int = 64,
 ) -> PolicyEvaluation:
-    """Each held-out board is played in all four seats; RNG and module modes are restored."""
+    """Batch active games, playing each held-out board in all four learner seats.
+
+    Environments step sequentially; inference uses the policy's device. RNG and module modes
+    are restored, and records retain board/seat order regardless of game completion order.
+    """
     if opponent not in ("random", "heuristic") or boards <= 0:
         raise ValueError("evaluation needs random/heuristic opponents and positive boards")
+    if batch_games <= 0:
+        raise ValueError("batch_games must be positive")
     if config.model.encoder not in ("mlp", "gnn"):
         raise ValueError("this evaluator supports MLP/GNN policies only")
     modes = [(module, module.training) for module in policy.modules()]
@@ -52,57 +69,84 @@ def evaluate_policy(
     try:
         policy.eval()
         with isolated_rng(seed):
-            for board in range(boards):
-                game_seed = derive_seed(seed, "evaluation-board", board)
-                for seat in range(4):
-                    env = CatanEnv(
-                        config.engine,
-                        replace(config.env, learner_seat=seat),
-                        [make_agent(opponent) for _ in range(3)],
-                    )
-                    try:
-                        obs, _ = env.reset(seed=game_seed)
-                        done, reward_sum, decisions = False, 0.0, 0
-                        state = policy.initial_state(1, device)
-                        while not done:
-                            batch = batch_observations([obs], device=device)
-                            out = policy(batch, state)
-                            state = out.state
-                            heads = out.distribution(batch["masks"]).sample(
-                                deterministic=deterministic
-                            )
-                            obs, reward, terminated, truncated, info = env.step(
-                                heads[0].cpu().numpy()
-                            )
-                            reward_sum += reward
-                            decisions += 1
-                            done = terminated or truncated
-                        winner = info["winner"]
-                        records.append(
-                            {
-                                "eval_seed": seed,
-                                "board": board,
-                                "game_seed": env.game.seed,
-                                "seat": seat,
-                                "opponent": opponent,
-                                "mode": "greedy" if deterministic else "sampled",
-                                "outcome": (
-                                    "truncated"
-                                    if truncated
-                                    else ("win" if winner == seat else "loss")
-                                ),
-                                "winner": -1 if winner is None else winner,
-                                "return": reward_sum,
-                                "learner_decisions": decisions,
-                                "turns": env.game.turn,
-                                "victory_points": env.game.victory_points(seat),
-                            }
+            jobs = [
+                (board, seat, derive_seed(seed, "evaluation-board", board))
+                for board in range(boards)
+                for seat in range(4)
+            ]
+            for start in range(0, len(jobs), batch_games):
+                envs = []
+                try:
+                    active = []
+                    for board, seat, game_seed in jobs[start : start + batch_games]:
+                        env = CatanEnv(
+                            config.engine,
+                            replace(config.env, learner_seat=seat),
+                            [make_agent(opponent) for _ in range(3)],
                         )
-                    finally:
+                        envs.append(env)  # Also close environments whose reset raises.
+                        obs, _ = env.reset(seed=game_seed)
+                        active.append(_ActiveGame(env, obs, board, seat))
+                    state = policy.initial_state(len(active), device)
+                    while active:
+                        batch = batch_observations([game.obs for game in active], device=device)
+                        out = policy(batch, state)
+                        actions = (
+                            out.distribution(batch["masks"])
+                            .sample(deterministic=deterministic)
+                            .cpu()
+                            .numpy()
+                        )
+                        next_active, kept_indices = [], []
+                        for index, game in enumerate(active):
+                            env, seat = game.env, game.seat
+                            game.obs, reward, terminated, truncated, info = env.step(actions[index])
+                            game.reward_sum += reward
+                            game.learner_decisions += 1
+                            if not (terminated or truncated):
+                                next_active.append(game)
+                                kept_indices.append(index)
+                                continue
+                            winner = info["winner"]
+                            records.append(
+                                {
+                                    "eval_seed": seed,
+                                    "board": game.board,
+                                    "game_seed": env.game.seed,
+                                    "seat": seat,
+                                    "opponent": opponent,
+                                    "mode": "greedy" if deterministic else "sampled",
+                                    "outcome": (
+                                        "truncated"
+                                        if truncated
+                                        else ("win" if winner == seat else "loss")
+                                    ),
+                                    "winner": -1 if winner is None else winner,
+                                    "return": game.reward_sum,
+                                    "learner_decisions": game.learner_decisions,
+                                    "turns": env.game.turn,
+                                    "victory_points": env.game.victory_points(seat),
+                                }
+                            )
+                        # State rows follow survivors in exactly the same order as observations.
+                        state = (
+                            out.state.index_select(
+                                0,
+                                torch.as_tensor(
+                                    kept_indices, device=out.state.device, dtype=torch.long
+                                ),
+                            )
+                            if out.state is not None
+                            else None
+                        )
+                        active = next_active
+                finally:
+                    for env in envs:
                         env.close()
     finally:
         for module, training in modes:
             module.training = training
+    records.sort(key=lambda record: (record["board"], record["seat"]))
     wins = sum(record["outcome"] == "win" for record in records)
     low, high = wilson_interval(wins, len(records))
     return PolicyEvaluation(
@@ -124,16 +168,30 @@ def evaluate_checkpoint(
     boards: int = 10,
     seed: int = 10_000,
     deterministic: bool = True,
+    batch_games: int = 64,
+    device: str = "auto",
 ) -> PolicyEvaluation:
     with isolated_rng():
+        resolved_device = (
+            torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            if device == "auto"
+            else torch.device(device)
+        )
         data = torch.load(checkpoint, map_location="cpu", weights_only=False)
         if data.get("config") is None:
             raise ValueError("checkpoint has no experiment config")
         config = from_dict(ExperimentConfig, data["config"])
         policy = build_policy(config.model)
         policy.load_state_dict(data["policy"])
+        policy.to(resolved_device)
         return evaluate_policy(
-            policy, config, opponent=opponent, boards=boards, seed=seed, deterministic=deterministic
+            policy,
+            config,
+            opponent=opponent,
+            boards=boards,
+            seed=seed,
+            deterministic=deterministic,
+            batch_games=batch_games,
         )
 
 

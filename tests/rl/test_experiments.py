@@ -13,7 +13,7 @@ from carla.config import load_config, save_config
 from carla.eval.analysis import analyze_runs, load_run, read_csv
 from carla.models.factory import build_policy
 from carla.rl.checkpoint import rng_state, save_checkpoint
-from carla.rl.evaluate import evaluate_policy, export_evaluation
+from carla.rl.evaluate import evaluate_checkpoint, evaluate_policy, export_evaluation
 from carla.rl.experiments import run_sweep
 from carla.rl.policy_tournament import run_policy_tournament
 from carla.rl.train import train
@@ -85,6 +85,114 @@ def test_evaluation_preserves_weights_rng_modes_and_board_pairing(deterministic,
         records = [r for r in first.records if r["board"] == board]
         assert {r["seat"] for r in records} == set(range(4))
         assert len({r["game_seed"] for r in records}) == 1
+
+
+@pytest.mark.parametrize("opponent", ["random", "heuristic"])
+def test_full_policy_batched_evaluation_matches_single_games(tmp_path, opponent):
+    cfg = tiny_config(tmp_path)
+    cfg = replace(
+        cfg,
+        engine=replace(cfg.engine, max_turns=4, allow_domestic_trade=True),
+        env=replace(cfg.env, max_events=8),
+        model=replace(
+            cfg.model,
+            encoder="gnn",
+            gnn_layers=1,
+            set_attention=True,
+            belief="gru",
+            belief_dim=8,
+            trade_decoder="gru",
+        ),
+    )
+    torch.manual_seed(0)
+    policy = build_policy(cfg.model)
+    single = evaluate_policy(
+        policy, cfg, opponent=opponent, boards=2, seed=20000, deterministic=True, batch_games=1
+    )
+    batch_sizes = []
+
+    def record_batch_size(module, args):
+        batch_sizes.append(args[0]["globals"].shape[0])
+
+    hook = policy.register_forward_pre_hook(record_batch_size)
+    try:
+        batched = evaluate_policy(
+            policy, cfg, opponent=opponent, boards=2, seed=20000, deterministic=True, batch_games=4
+        )
+    finally:
+        hook.remove()
+    assert single.records == batched.records
+    assert max(batch_sizes) == 4 and any(0 < size < 4 for size in batch_sizes)
+    assert len({record["learner_decisions"] for record in batched.records}) > 1
+
+
+@pytest.mark.parametrize("batch_games", [0, -1])
+def test_evaluation_rejects_nonpositive_batch_games(tmp_path, batch_games):
+    cfg = tiny_config(tmp_path)
+    with pytest.raises(ValueError, match="batch_games must be positive"):
+        evaluate_policy(build_policy(cfg.model), cfg, boards=1, batch_games=batch_games)
+
+
+@pytest.mark.parametrize("device", ["auto", "cpu"])
+def test_checkpoint_evaluation_preserves_checkpoint_and_matches_policy(tmp_path, device):
+    cfg = tiny_config(tmp_path)
+    policy = build_policy(cfg.model)
+    checkpoint = save_checkpoint(tmp_path / "policy.pt", policy, config=cfg)
+    before = checkpoint.read_bytes()
+    expected = evaluate_policy(policy, cfg, boards=1, batch_games=4)
+    actual = evaluate_checkpoint(checkpoint, boards=1, batch_games=4, device=device)
+    assert actual.records == expected.records
+    assert checkpoint.read_bytes() == before
+
+
+@pytest.mark.parametrize("failure", ["reset", "inference", "step"])
+def test_evaluation_closes_environments_and_restores_modes_after_failure(
+    tmp_path, monkeypatch, failure
+):
+    from carla.envs.catan_env import CatanEnv
+
+    cfg = tiny_config(tmp_path)
+    policy = build_policy(cfg.model)
+    policy.train()
+    policy.trunk.eval()
+    modes = [module.training for module in policy.modules()]
+    created, closed = [], []
+    original_init = CatanEnv.__init__
+    original_reset = CatanEnv.reset
+    original_step = CatanEnv.step
+
+    def track_init(env, *args, **kwargs):
+        original_init(env, *args, **kwargs)
+        created.append(env)
+
+    def fail_reset(env, *args, **kwargs):
+        if len(created) == 2:
+            raise RuntimeError("evaluation failure")
+        return original_reset(env, *args, **kwargs)
+
+    def fail_step(env, action):
+        if env is created[1]:
+            raise RuntimeError("evaluation failure")
+        return original_step(env, action)
+
+    def fail_forward(*args, **kwargs):
+        raise RuntimeError("evaluation failure")
+
+    monkeypatch.setattr(CatanEnv, "__init__", track_init)
+    monkeypatch.setattr(CatanEnv, "close", lambda env: closed.append(env))
+    if failure == "reset":
+        monkeypatch.setattr(CatanEnv, "reset", fail_reset)
+    elif failure == "inference":
+        monkeypatch.setattr(policy, "forward", fail_forward)
+    else:
+        monkeypatch.setattr(CatanEnv, "step", fail_step)
+    state = rng_state()
+    with pytest.raises(RuntimeError, match="evaluation failure"):
+        evaluate_policy(policy, cfg, boards=1, batch_games=4)
+    assert len(created) == (2 if failure == "reset" else 4)
+    assert closed == created
+    assert [module.training for module in policy.modules()] == modes
+    assert torch.equal(rng_state()["torch"], state["torch"])
 
 
 def test_telemetry_and_evaluation_do_not_change_training(tmp_path):

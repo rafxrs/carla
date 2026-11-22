@@ -50,6 +50,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--opponent", choices=("random", "heuristic"), default="heuristic")
     p.add_argument("--boards", type=int, default=10, help="held-out boards, each played in 4 seats")
     p.add_argument("--seed", type=int, default=10_000)
+    p.add_argument(
+        "--batch-games", type=int, default=64, help="maximum simultaneously active evaluation games"
+    )
+    p.add_argument(
+        "--device", default="auto", help='evaluation device: "auto", "cpu", or "cuda[:i]"'
+    )
 
     # Final test exports stay separate from the training journals and their recovery counts.
     p.add_argument("--sampled", action="store_true", help="sample actions instead of greedy play")
@@ -227,6 +233,8 @@ def _evaluate(args) -> int:
         boards=args.boards,
         seed=args.seed,
         deterministic=not args.sampled,
+        batch_games=args.batch_games,
+        device=args.device,
     )
     if args.csv is not None:
         from carla.rl.evaluate import export_evaluation
