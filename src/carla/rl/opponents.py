@@ -11,6 +11,9 @@ from carla.config.schema import OpponentPoolConfig
 
 BOT_KINDS = (
     "random",
+    "heuristic05",
+    "heuristic10",
+    "heuristic15",
     "heuristic25",
     "heuristic50",
     "heuristic75",

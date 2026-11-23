@@ -13,11 +13,27 @@ def assert_same_game(a: GameResult, b: GameResult) -> None:
 
 
 def test_registry():
-    assert {"random", "heuristic25", "heuristic50", "heuristic75", "heuristic"} <= set(AGENTS)
+    assert {
+        "random",
+        "heuristic05",
+        "heuristic10",
+        "heuristic15",
+        "heuristic25",
+        "heuristic50",
+        "heuristic75",
+        "heuristic",
+    } <= set(AGENTS)
     assert "noisy_heuristic" not in AGENTS
     agent = make_agent("random_flat")
     assert isinstance(agent, RandomAgent) and agent.name == "random_flat" and not agent.by_type
-    for name, probability in (("heuristic25", 0.25), ("heuristic50", 0.5), ("heuristic75", 0.75)):
+    for name, probability in (
+        ("heuristic05", 0.05),
+        ("heuristic10", 0.10),
+        ("heuristic15", 0.15),
+        ("heuristic25", 0.25),
+        ("heuristic50", 0.5),
+        ("heuristic75", 0.75),
+    ):
         noisy = make_agent(name)
         assert isinstance(noisy, NoisyHeuristicAgent) and noisy.name == name
         assert noisy.heuristic_probability == probability

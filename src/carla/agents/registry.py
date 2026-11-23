@@ -12,6 +12,9 @@ AGENTS: dict[str, Callable[[], Agent]] = {
     "random_flat": lambda: RandomAgent(by_type=False),
 
 
+    "heuristic05": lambda: NoisyHeuristicAgent(0.05),
+    "heuristic10": lambda: NoisyHeuristicAgent(0.10),
+    "heuristic15": lambda: NoisyHeuristicAgent(0.15),
     "heuristic25": lambda: NoisyHeuristicAgent(0.25),
     "heuristic50": lambda: NoisyHeuristicAgent(0.50),
     "heuristic75": lambda: NoisyHeuristicAgent(0.75),
