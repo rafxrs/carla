@@ -47,7 +47,20 @@ def main(argv: list[str] | None = None) -> int:
 
     p = commands.add_parser("evaluate", help="evaluate a checkpoint with seat rotation")
     p.add_argument("checkpoint", type=Path)
-    p.add_argument("--opponent", choices=("random", "heuristic"), default="heuristic")
+    p.add_argument(
+        "--opponent",
+        choices=(
+            "random",
+            "heuristic05",
+            "heuristic10",
+            "heuristic15",
+            "heuristic25",
+            "heuristic50",
+            "heuristic75",
+            "heuristic",
+        ),
+        default="heuristic",
+    )
     p.add_argument("--boards", type=int, default=10, help="held-out boards, each played in 4 seats")
     p.add_argument("--seed", type=int, default=10_000)
     p.add_argument(

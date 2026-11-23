@@ -57,8 +57,21 @@ def evaluate_policy(
     Environments step sequentially; inference uses the policy's device. RNG and module modes
     are restored, and records retain board/seat order regardless of game completion order.
     """
-    if opponent not in ("random", "heuristic") or boards <= 0:
-        raise ValueError("evaluation needs random/heuristic opponents and positive boards")
+    VALID_EVAL_OPPONENTS = (
+        "random",
+        "heuristic05",
+        "heuristic10",
+        "heuristic15",
+        "heuristic25",
+        "heuristic50",
+        "heuristic75",
+        "heuristic",
+    )
+    
+    if opponent not in VALID_EVAL_OPPONENTS or boards <= 0:
+        raise ValueError(
+            "evaluation needs a registered evaluation opponent and positive boards"
+        )
     if batch_games <= 0:
         raise ValueError("batch_games must be positive")
     if config.model.encoder not in ("mlp", "gnn"):

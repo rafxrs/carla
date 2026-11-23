@@ -114,24 +114,25 @@ def test_train_resume_and_evaluate(tmp_path, capsys, encoder):
     assert first["counters"] == {"env_steps": 8, "updates": 1}
     assert first["optimizer"]["state"]
     assert all(torch.isfinite(value).all() for value in first["policy"].values())
-    assert (
-        main(
-            [
-                "evaluate",
-                str(checkpoint),
-                "--opponent",
-                "random",
-                "--boards",
-                "1",
-                "--device",
-                "cpu",
-                "--batch-games",
-                "4",
-            ]
+    for opponent in ("random", "heuristic05"):
+        assert (
+            main(
+                [
+                    "evaluate",
+                    str(checkpoint),
+                    "--opponent",
+                    opponent,
+                    "--boards",
+                    "1",
+                    "--device",
+                    "cpu",
+                    "--batch-games",
+                    "4",
+                ]
+            )
+            == 0
         )
-        == 0
-    )
-    assert "policy vs random:" in capsys.readouterr().out
+        assert f"policy vs {opponent}:" in capsys.readouterr().out
     assert (
         main(
             [

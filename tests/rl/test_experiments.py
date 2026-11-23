@@ -133,14 +133,20 @@ def test_evaluation_rejects_nonpositive_batch_games(tmp_path, batch_games):
         evaluate_policy(build_policy(cfg.model), cfg, boards=1, batch_games=batch_games)
 
 
-@pytest.mark.parametrize("device", ["auto", "cpu"])
-def test_checkpoint_evaluation_preserves_checkpoint_and_matches_policy(tmp_path, device):
+@pytest.mark.parametrize(
+    ("device", "opponent"),
+    [("auto", "heuristic"), ("cpu", "heuristic"), ("cpu", "heuristic05")],
+)
+def test_checkpoint_evaluation_preserves_checkpoint_and_matches_policy(tmp_path, device, opponent):
     cfg = tiny_config(tmp_path)
     policy = build_policy(cfg.model)
     checkpoint = save_checkpoint(tmp_path / "policy.pt", policy, config=cfg)
     before = checkpoint.read_bytes()
-    expected = evaluate_policy(policy, cfg, boards=1, batch_games=4)
-    actual = evaluate_checkpoint(checkpoint, boards=1, batch_games=4, device=device)
+    expected = evaluate_policy(policy, cfg, opponent=opponent, boards=1, batch_games=4)
+    actual = evaluate_checkpoint(
+        checkpoint, opponent=opponent, boards=1, batch_games=4, device=device
+    )
+    assert actual.games == 4 and actual.opponent == opponent
     assert actual.records == expected.records
     assert checkpoint.read_bytes() == before
 
