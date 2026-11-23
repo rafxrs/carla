@@ -1,14 +1,26 @@
 import pytest
 
-from carla.agents import AGENTS, HeuristicAgent, RandomAgent, make_agent
+from carla.agents import AGENTS, HeuristicAgent, NoisyHeuristicAgent, RandomAgent, make_agent
 from carla.engine.game import Game
-from carla.eval.runner import play_game
+from carla.eval.runner import GameResult, play_game
+
+
+def assert_same_game(a: GameResult, b: GameResult) -> None:
+    assert a.winner == b.winner
+    assert a.victory_points == b.victory_points
+    assert a.turns == b.turns
+    assert a.steps == b.steps
 
 
 def test_registry():
-    assert {"random", "heuristic"} <= set(AGENTS)
+    assert {"random", "heuristic25", "heuristic50", "heuristic75", "heuristic"} <= set(AGENTS)
+    assert "noisy_heuristic" not in AGENTS
     agent = make_agent("random_flat")
     assert isinstance(agent, RandomAgent) and agent.name == "random_flat" and not agent.by_type
+    for name, probability in (("heuristic25", 0.25), ("heuristic50", 0.5), ("heuristic75", 0.75)):
+        noisy = make_agent(name)
+        assert isinstance(noisy, NoisyHeuristicAgent) and noisy.name == name
+        assert noisy.heuristic_probability == probability
     with pytest.raises(ValueError, match="unknown agent"):
         make_agent("alphazero")
 
@@ -40,3 +52,58 @@ def test_heuristic_beats_random():
         for s in range(12)
     )
     assert wins >= 10
+
+
+def test_noisy_heuristic_is_reproducible():
+    agents_a = [
+        NoisyHeuristicAgent(0.25),
+        RandomAgent(),
+        RandomAgent(),
+        RandomAgent(),
+    ]
+    agents_b = [
+        NoisyHeuristicAgent(0.25),
+        RandomAgent(),
+        RandomAgent(),
+        RandomAgent(),
+    ]
+
+    a = play_game(agents_a, seed=17)
+    b = play_game(agents_b, seed=17)
+
+    assert a == b
+
+
+def test_noisy_heuristic_probability_endpoints():
+    for seed in range(5):
+        random_game = play_game(
+            [RandomAgent(), RandomAgent(), RandomAgent(), RandomAgent()],
+            seed=seed,
+        )
+        noisy_random_game = play_game(
+            [
+                NoisyHeuristicAgent(0.0),
+                RandomAgent(),
+                RandomAgent(),
+                RandomAgent(),
+            ],
+            seed=seed,
+        )
+
+        assert_same_game(random_game, noisy_random_game)
+
+        heuristic_game = play_game(
+            [HeuristicAgent(), RandomAgent(), RandomAgent(), RandomAgent()],
+            seed=seed,
+        )
+        noisy_heuristic_game = play_game(
+            [
+                NoisyHeuristicAgent(1.0),
+                RandomAgent(),
+                RandomAgent(),
+                RandomAgent(),
+            ],
+            seed=seed,
+        )
+
+        assert_same_game(heuristic_game, noisy_heuristic_game)

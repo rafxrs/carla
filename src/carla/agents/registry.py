@@ -4,11 +4,18 @@ from collections.abc import Callable
 
 from carla.agents.base import Agent
 from carla.agents.heuristic import HeuristicAgent
+from carla.agents.noisy_heuristic import NoisyHeuristicAgent
 from carla.agents.random_agent import RandomAgent
 
 AGENTS: dict[str, Callable[[], Agent]] = {
     "random": RandomAgent,
     "random_flat": lambda: RandomAgent(by_type=False),
+
+
+    "heuristic25": lambda: NoisyHeuristicAgent(0.25),
+    "heuristic50": lambda: NoisyHeuristicAgent(0.50),
+    "heuristic75": lambda: NoisyHeuristicAgent(0.75),
+
     "heuristic": HeuristicAgent,
 }
 """TODO(eval): register trained policies, e.g. "ppo:<checkpoint path>"."""

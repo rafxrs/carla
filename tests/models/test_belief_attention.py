@@ -104,5 +104,5 @@ def test_bot_tables_mix_kinds_in_proportion():
     assert all(sorted(table) == ["heuristic", "random", "random"] for w in tables for table in w)
     single = bot_tables(OpponentPoolConfig(pool=(OpponentSpec("heuristic"),)), 1, 2)
     assert single == [[["heuristic"] * 3] * 2]
-    with pytest.raises(ValueError, match="random/heuristic"):
+    with pytest.raises(ValueError, match="registered bot kinds with positive weight"):
         bot_tables(OpponentPoolConfig(pool=(OpponentSpec("self"),)), 1, 1)

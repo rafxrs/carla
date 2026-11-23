@@ -9,8 +9,13 @@ in proportion to its weight, using the worker's seeded RNG.
 from carla.agents.base import Agent
 from carla.config.schema import OpponentPoolConfig
 
-BOT_KINDS = ("random", "heuristic")
-
+BOT_KINDS = (
+    "random",
+    "heuristic25",
+    "heuristic50",
+    "heuristic75",
+    "heuristic",
+)
 
 def bot_tables(config: OpponentPoolConfig, num_workers: int, envs_per_worker: int) -> list:
     """Fixed bot kinds for every opponent seat: `tables[worker][env]` lists three kinds.
@@ -21,7 +26,8 @@ def bot_tables(config: OpponentPoolConfig, num_workers: int, envs_per_worker: in
     """
     specs = config.pool
     if not specs or any(spec.kind not in BOT_KINDS or spec.weight <= 0 for spec in specs):
-        raise ValueError("synchronous PPO opponents must be random/heuristic with positive weight")
+        raise ValueError("synchronous PPO opponents must be registered bot kinds with positive weight"
+)
     tables_count = num_workers * envs_per_worker
     total = 3 * tables_count
     weight_sum = sum(spec.weight for spec in specs)

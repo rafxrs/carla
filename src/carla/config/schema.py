@@ -76,7 +76,16 @@ class PPOConfig:
 
 @dataclass(frozen=True)
 class OpponentSpec:
-    kind: Literal["self", "snapshot", "random", "heuristic", "checkpoint"]
+    kind: Literal[
+                "self",
+                "snapshot",
+                "random",
+                "heuristic25",
+                "heuristic50",
+                "heuristic75",
+                "heuristic",
+                "checkpoint",
+            ]
     weight: float = 1.0
     path: str | None = None
     """Checkpoint file for kind == "checkpoint"."""

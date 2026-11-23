@@ -2,7 +2,8 @@
 
 from carla.agents.base import Agent
 from carla.agents.heuristic import HeuristicAgent
+from carla.agents.noisy_heuristic import NoisyHeuristicAgent
 from carla.agents.random_agent import RandomAgent
 from carla.agents.registry import AGENTS, make_agent
 
-__all__ = ["AGENTS", "Agent", "HeuristicAgent", "RandomAgent", "make_agent"]
+__all__ = ["AGENTS", "Agent", "HeuristicAgent", "NoisyHeuristicAgent", "RandomAgent", "make_agent"]
