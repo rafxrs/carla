@@ -10,7 +10,7 @@ in the env and played automatically between the learner's decisions.
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import gymnasium as gym
 import numpy as np
@@ -29,6 +29,9 @@ from carla.engine.text import describe_state
 from carla.envs.action_space import HEAD_NAMES, HEAD_SIZES, decode_action, encode_action
 from carla.envs.observation import ObservationEncoder
 from carla.envs.rewards import potential, public_victory_points, step_rewards
+
+if TYPE_CHECKING:
+    from carla.envs.training_diagnostics import TrainingDiagnostics
 
 
 @dataclass
@@ -61,6 +64,11 @@ class CatanAECEnv:
         self.encoder = encoder or ObservationEncoder(self.config.max_events)
         self._game: Game | None = None
         self._pending: list[list[Event]] = [[] for _ in range(NUM_PLAYERS)]
+        self._training_diagnostics: TrainingDiagnostics | None = None
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._training_diagnostics = state.get("_training_diagnostics")
 
     @property
     def game(self) -> Game:
@@ -90,7 +98,16 @@ class CatanAECEnv:
         if not isinstance(action, Action):
             action = decode_action(action, game.decision_player)
         vp_before = public_victory_points(game) if self.config.vp_reward else None
+        diagnostics = self._training_diagnostics
+        if diagnostics is not None:
+            actor = game.decision_player
+            if actor == diagnostics.learner:
+                phase = game.phase
         events = game.step(action)
+        if diagnostics is not None:
+            if actor == diagnostics.learner:
+                diagnostics.action_applied(actor, phase, action)
+            diagnostics.after_step(game, events)
         for seat in range(NUM_PLAYERS):
             self._pending[seat].extend(e.visible_to(seat) for e in events)
         rewards = step_rewards(vp_before, game, self.config)
@@ -149,6 +166,8 @@ class CatanEnv(gym.Env):
         env_config: EnvConfig | None = None,
         opponents: Sequence[Agent] | None = None,
         render_mode: str | None = None,
+        *,
+        collect_training_diagnostics: bool = False,
     ) -> None:
         self.aec = CatanAECEnv(engine_config, env_config)
         self.config = self.aec.config
@@ -163,6 +182,27 @@ class CatanEnv(gym.Env):
         self.learner = 0
         self._seat_agents: dict[int, Agent] = {}
         self._potential = 0.0
+        self._collect_training_diagnostics = collect_training_diagnostics
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._collect_training_diagnostics = state.get("_collect_training_diagnostics", False)
+
+    @property
+    def training_diagnostics(self) -> "TrainingDiagnostics | None":
+        return self.aec._training_diagnostics
+
+    def configure_training_diagnostics(self, enabled: bool, *, partial: bool = True) -> None:
+        """Restore optional collection without resetting counters already in a checkpoint."""
+        self._collect_training_diagnostics = enabled
+        if not enabled:
+            self.aec._training_diagnostics = None
+        elif self.aec._game is not None and self.training_diagnostics is None:
+            from carla.envs.training_diagnostics import TrainingDiagnostics
+
+            self.aec._training_diagnostics = TrainingDiagnostics(
+                self.learner, self.game.victory_points(self.learner), complete=not partial
+            )
 
     @property
     def game(self) -> Game:
@@ -174,6 +214,10 @@ class CatanEnv(gym.Env):
         seat = self.config.learner_seat
         self.learner = int(self.np_random.integers(NUM_PLAYERS)) if seat < 0 else seat
         self.aec.reset(game_seed)
+        if self._collect_training_diagnostics:
+            from carla.envs.training_diagnostics import TrainingDiagnostics
+
+            self.aec._training_diagnostics = TrainingDiagnostics(self.learner)
         others = [p for p in range(NUM_PLAYERS) if p != self.learner]
         self._seat_agents = dict(zip(others, self.opponents, strict=True))
         for p, agent in self._seat_agents.items():

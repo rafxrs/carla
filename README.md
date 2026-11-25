@@ -22,6 +22,11 @@ For Gymnasium clients that check decoder action shapes, use `TradeActionWrapper`
 
 Training metrics, periodic validation, gamma/lambda/rollout sweeps, and analysis commands are
 documented in [docs/experiments.md](docs/experiments.md).
+Configurable strategic rewards, separate trade-token entropy, mixed-opponent checkpoint
+evaluation and retrospective gameplay diagnostics are documented in
+[docs/strategic_diagnostics.md](docs/strategic_diagnostics.md).
+Optional learner-only training counters and their benchmark are documented in
+[docs/training_diagnostics.md](docs/training_diagnostics.md).
 
 ## Setup
 

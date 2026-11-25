@@ -1,16 +1,19 @@
 """Frozen-policy evaluation on held-out boards with individual game records."""
 
 import csv
+import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import torch
 
-from carla.agents import make_agent
+from carla.agents import AGENTS, make_agent
 from carla.config.loader import from_dict
 from carla.config.schema import ExperimentConfig
 from carla.engine.rng import derive_seed
 from carla.envs.catan_env import CatanEnv
+from carla.eval.diagnostics import GameplayDiagnostics, diagnose_game, summarize_diagnostics
 from carla.eval.metrics import wilson_interval
 from carla.models.base import batch_observations
 from carla.models.factory import build_policy
@@ -29,6 +32,28 @@ class PolicyEvaluation:
     ci_high: float
     mean_vp: float
     records: list[dict] = field(default_factory=list)
+    diagnostics: GameplayDiagnostics | None = None
+
+
+MIXED_EVALUATION_FIELDS = ("opponent_composition", "opponent_seats")
+
+
+def _opponent_spec(opponent: str | None, opponents: Sequence[str] | None):
+    if opponent is not None and opponents is not None:
+        raise ValueError("choose opponent or opponents, not both")
+    kinds = (
+        (("heuristic" if opponent is None else opponent),) * 3
+        if opponents is None
+        else tuple(opponents)
+    )
+    if isinstance(opponents, str) or len(kinds) != 3:
+        raise ValueError("mixed evaluation requires exactly three opponents")
+    if any(not isinstance(kind, str) or kind not in AGENTS for kind in kinds):
+        raise ValueError(f"evaluation needs registered opponents; known: {sorted(AGENTS)}")
+    identity = (
+        kinds[0] if len(set(kinds)) == 1 else "mixed:" + json.dumps(kinds, separators=(",", ":"))
+    )
+    return kinds, identity
 
 
 @dataclass
@@ -46,32 +71,26 @@ def evaluate_policy(
     policy,
     config: ExperimentConfig,
     *,
-    opponent: str = "heuristic",
+    opponent: str | None = None,
+    opponents: Sequence[str] | None = None,
     boards: int = 10,
     seed: int = 10_000,
     deterministic: bool = True,
     batch_games: int = 64,
+    diagnostics: bool = False,
+    trajectories: bool = False,
+    checkpoint_id: str | None = None,
 ) -> PolicyEvaluation:
     """Batch active games, playing each held-out board in all four learner seats.
 
     Environments step sequentially; inference uses the policy's device. RNG and module modes
     are restored, and records retain board/seat order regardless of game completion order.
     """
-    VALID_EVAL_OPPONENTS = (
-        "random",
-        "heuristic05",
-        "heuristic10",
-        "heuristic15",
-        "heuristic25",
-        "heuristic50",
-        "heuristic75",
-        "heuristic",
-    )
-    
-    if opponent not in VALID_EVAL_OPPONENTS or boards <= 0:
-        raise ValueError(
-            "evaluation needs a registered evaluation opponent and positive boards"
-        )
+    kinds, opponent = _opponent_spec(opponent, opponents)
+    if boards <= 0:
+        raise ValueError("evaluation needs positive boards")
+    if trajectories and not diagnostics:
+        raise ValueError("trajectories require diagnostics")
     if batch_games <= 0:
         raise ValueError("batch_games must be positive")
     if config.model.encoder not in ("mlp", "gnn"):
@@ -79,6 +98,7 @@ def evaluate_policy(
     modes = [(module, module.training) for module in policy.modules()]
     device = next(policy.parameters()).device
     records = []
+    diagnostic_result = GameplayDiagnostics() if diagnostics else None
     try:
         policy.eval()
         with isolated_rng(seed):
@@ -95,7 +115,7 @@ def evaluate_policy(
                         env = CatanEnv(
                             config.engine,
                             replace(config.env, learner_seat=seat),
-                            [make_agent(opponent) for _ in range(3)],
+                            [make_agent(kind) for kind in kinds],
                         )
                         envs.append(env)  # Also close environments whose reset raises.
                         obs, _ = env.reset(seed=game_seed)
@@ -141,6 +161,56 @@ def evaluate_policy(
                                     "victory_points": env.game.victory_points(seat),
                                 }
                             )
+                            if opponents is not None or diagnostic_result is not None:
+                                seat_agents = dict(
+                                    zip((p for p in range(4) if p != seat), kinds, strict=True)
+                                )
+                                composition = json.dumps(kinds, separators=(",", ":"))
+                                seats = json.dumps(
+                                    ["learner" if p == seat else seat_agents[p] for p in range(4)],
+                                    separators=(",", ":"),
+                                )
+                            if opponents is not None:
+                                records[-1].update(
+                                    opponent_composition=composition, opponent_seats=seats
+                                )
+                            if diagnostic_result is not None:
+                                detail = diagnose_game(env.game, trajectories=trajectories)
+                                common = {
+                                    "checkpoint": checkpoint_id,
+                                    "eval_seed": seed,
+                                    "board": game.board,
+                                    "game_seed": env.game.seed,
+                                    "learner_seat": seat,
+                                    "opponent": opponent,
+                                    "opponent_composition": composition,
+                                    "opponent_seats": seats,
+                                    "mode": records[-1]["mode"],
+                                    "winner": records[-1]["winner"],
+                                    "game_turns": env.game.turn,
+                                    "game_steps": env.game.num_steps,
+                                }
+                                for rows, destination in (
+                                    (detail.players, diagnostic_result.players),
+                                    (detail.trades, diagnostic_result.trades),
+                                    (detail.offers, diagnostic_result.offers),
+                                    (detail.trajectories, diagnostic_result.trajectories),
+                                ):
+                                    for row in rows:
+                                        player = row["player_seat"]
+                                        row.update(common)
+                                        row.update(
+                                            role="learner" if player == seat else "opponent",
+                                            agent_type=(
+                                                "learner" if player == seat else seat_agents[player]
+                                            ),
+                                            outcome=(
+                                                "truncated"
+                                                if truncated
+                                                else ("win" if player == winner else "loss")
+                                            ),
+                                        )
+                                        destination.append(row)
                         # State rows follow survivors in exactly the same order as observations.
                         state = (
                             out.state.index_select(
@@ -160,6 +230,22 @@ def evaluate_policy(
         for module, training in modes:
             module.training = training
     records.sort(key=lambda record: (record["board"], record["seat"]))
+    if diagnostic_result is not None:
+        for rows in (
+            diagnostic_result.players,
+            diagnostic_result.trades,
+            diagnostic_result.offers,
+            diagnostic_result.trajectories,
+        ):
+            rows.sort(
+                key=lambda row: (
+                    row["board"],
+                    row["learner_seat"],
+                    row.get("turn", -1),
+                    row["player_seat"],
+                )
+            )
+        diagnostic_result.summary = summarize_diagnostics(diagnostic_result.players)
     wins = sum(record["outcome"] == "win" for record in records)
     low, high = wilson_interval(wins, len(records))
     return PolicyEvaluation(
@@ -171,18 +257,22 @@ def evaluate_policy(
         high,
         sum(r["victory_points"] for r in records) / len(records),
         records,
+        diagnostic_result,
     )
 
 
 def evaluate_checkpoint(
     checkpoint: str | Path,
     *,
-    opponent: str = "heuristic",
+    opponent: str | None = None,
+    opponents: Sequence[str] | None = None,
     boards: int = 10,
     seed: int = 10_000,
     deterministic: bool = True,
     batch_games: int = 64,
     device: str = "auto",
+    diagnostics: bool = False,
+    trajectories: bool = False,
 ) -> PolicyEvaluation:
     with isolated_rng():
         resolved_device = (
@@ -201,10 +291,14 @@ def evaluate_checkpoint(
             policy,
             config,
             opponent=opponent,
+            opponents=opponents,
             boards=boards,
             seed=seed,
             deterministic=deterministic,
             batch_games=batch_games,
+            diagnostics=diagnostics,
+            trajectories=trajectories,
+            checkpoint_id=str(Path(checkpoint).resolve()),
         )
 
 
@@ -227,9 +321,19 @@ def export_evaluation(
             "test seed must differ from the training validation seed; pass --seed 20000"
         )
     existing = []
+    fields = EVALUATION_FIELDS + (
+        MIXED_EVALUATION_FIELDS if any("opponent_composition" in r for r in result.records) else ()
+    )
     if path.exists():
         with path.open(newline="", encoding="utf-8") as stream:
-            existing = list(csv.DictReader(stream))
+            reader = csv.DictReader(stream)
+            if reader.fieldnames == list(EVALUATION_FIELDS + MIXED_EVALUATION_FIELDS):
+                fields = EVALUATION_FIELDS + MIXED_EVALUATION_FIELDS
+            elif fields != EVALUATION_FIELDS and reader.fieldnames == list(EVALUATION_FIELDS):
+                raise ValueError(
+                    "mixed evaluation needs a separate CSV; existing homogeneous exports are preserved"
+                )
+            existing = list(reader)
     checkpoint_name = checkpoint.relative_to(run).as_posix()
     keys = {
         (
@@ -250,7 +354,7 @@ def export_evaluation(
     ):
         raise ValueError("evaluation export already contains these checkpoint/games")
     path.parent.mkdir(parents=True, exist_ok=True)
-    journal = CsvJournal(path, EVALUATION_FIELDS, len(existing))
+    journal = CsvJournal(path, fields, len(existing))
     state = data.get("training_state") or {}
     for record in result.records:
         journal.write(

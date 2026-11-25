@@ -30,6 +30,8 @@ def collect_rollouts(
     diagnostics: RolloutDiagnostics | None = None,
     env_steps: int = 0,
     env_id_offset: int = 0,
+    training_records: list[dict] | None = None,
+    worker_id: int = 0,
 ) -> tuple[list[RolloutBatch], list[dict]]:
     """Collect `num_steps` decisions per env, retaining independent episode boundaries.
 
@@ -87,7 +89,14 @@ def collect_rollouts(
             done = terminated or truncated
             if trackers is not None:
                 record = trackers[i].step(
-                    reward, env, done, env_id_offset + i, env_steps + step * n + i + 1
+                    reward,
+                    env,
+                    done,
+                    env_id_offset + i,
+                    env_steps + step * n + i + 1,
+                    training_records=training_records,
+                    worker_id=worker_id,
+                    policy_version=policy_version,
                 )
                 if record is not None and episode_records is not None:
                     episode_records.append(record)

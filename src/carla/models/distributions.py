@@ -99,6 +99,10 @@ class FactoredDistribution:
                 total = total + p_type[:, t] * (dev_h if key == "dev" else h(key))
         return total
 
+    def trade_token_entropy(self) -> Tensor:
+        """Per-action token entropy contribution; zero for a policy without a decoder."""
+        return self.logp["type"].new_zeros(self.batch)
+
 
 class TradeDistribution(FactoredDistribution):
     """Eight action heads plus padded offer tokens when the type is PROPOSE_TRADE.
@@ -188,6 +192,16 @@ class TradeDistribution(FactoredDistribution):
             - self.logp["type"].exp()[:, _T.PROPOSE_TRADE] * old_trade_entropy
             + self._conditional_entropy
         )
+
+    def trade_token_entropy(self) -> Tensor:
+        """Token entropy along stored/sampled offer prefixes, zero on non-offer rows.
+
+        Its batch mean is the token contribution to `entropy()`, not the mean conditional
+        on proposing an offer. Scoring actions first selects their exact stored prefixes.
+        """
+        if not self._entropy_ready:
+            self.sample()
+        return self._conditional_entropy
 
 
 def _numel(shape: tuple[int, ...]) -> int:

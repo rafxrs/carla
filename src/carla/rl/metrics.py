@@ -1,5 +1,6 @@
 """Training episode accounting and observation-conditioned policy diagnostics."""
 
+import json
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -20,10 +21,18 @@ DIAGNOSTIC_FIELDS = (
     "main_end_turn_rate_when_buildable",
     *HEAD_METRICS,
 )
+ENTROPY_FIELDS = (
+    "trade_token_entropy",  # Mean over all minibatch rows, including non-offer zeros.
+    "trade_token_entropy_conditional",  # Mean over proposal rows only; 0 if none.
+    "trade_proposal_fraction",
+    "non_trade_entropy",
+    "entropy_bonus",
+)
 PPO_FIELDS = (
     "policy_loss",
     "value_loss",
     "entropy",
+    *ENTROPY_FIELDS,
     "approx_kl",
     "clip_fraction",
     "grad_norm",
@@ -102,7 +111,18 @@ class EpisodeTracker:
     partial: bool = False
     """Legacy checkpoints lack episode accumulators; omit that first incomplete record."""
 
-    def step(self, reward: float, env, done: bool, env_id: int, env_steps: int) -> dict | None:
+    def step(
+        self,
+        reward: float,
+        env,
+        done: bool,
+        env_id: int,
+        env_steps: int,
+        *,
+        training_records: list[dict] | None = None,
+        worker_id: int = 0,
+        policy_version: int = 0,
+    ) -> dict | None:
         self.reward += reward
         self.decisions += 1
         if not done:
@@ -126,6 +146,19 @@ class EpisodeTracker:
             "turns": env.game.turn,
             "victory_points": env.game.victory_points(env.learner),
         }
+        if training_records is not None and env.training_diagnostics is not None:
+            training_records.append(
+                {
+                    **record,
+                    **env.training_diagnostics.record(),
+                    "worker_id": worker_id,
+                    "policy_version": policy_version,
+                    "opponent_composition": json.dumps(
+                        [agent.name for agent in env.opponents], separators=(",", ":")
+                    ),
+                    "diagnostics_complete": env.training_diagnostics.complete and not self.partial,
+                }
+            )
         partial = self.partial
         self.episode_id += 1
         self.reward, self.decisions, self.partial = 0.0, 0, False
@@ -168,7 +201,7 @@ class RolloutDiagnostics:
             if key == "trade" and isinstance(dist, TradeDistribution):
                 # The one-for-one head is unused; report entropy along sampled offer prefixes.
                 chosen = heads[:, 0] == ActionType.PROPOSE_TRADE
-                self.add("head_trade_entropy", dist._conditional_entropy[chosen].cpu().numpy())
+                self.add("head_trade_entropy", dist.trade_token_entropy()[chosen].cpu().numpy())
                 continue
             # Dummy uniform distributions for unavailable heads must not enter the mean.
             self.add(f"head_{key}_entropy", entropies[masks[key].any(1), i])

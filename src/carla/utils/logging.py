@@ -20,15 +20,30 @@ class CsvJournal:
     silently reporting an incomplete experiment. One training process owns each journal.
     """
 
-    def __init__(self, path: Path, fields: Sequence[str], committed_rows: int = 0) -> None:
+    def __init__(
+        self,
+        path: Path,
+        fields: Sequence[str],
+        committed_rows: int = 0,
+        *,
+        optional_fields: Sequence[str] = (),
+    ) -> None:
         self.path = path
         self.fields = list(fields)
+        self.optional_fields = set(optional_fields)
         rows = []
         if path.exists():
             with path.open(newline="", encoding="utf-8") as stream:
                 reader = csv.DictReader(stream)
                 if reader.fieldnames != self.fields:
-                    raise ValueError(f"CSV schema mismatch: {path}")
+                    legacy = reader.fieldnames or []
+                    if (
+                        legacy != [name for name in self.fields if name in legacy]
+                        or set(self.fields) - set(legacy) - self.optional_fields
+                        or set(legacy) - set(self.fields)
+                    ):
+                        raise ValueError(f"CSV schema mismatch: {path}")
+                    self.fields = legacy
                 rows = list(reader)
         if len(rows) < committed_rows:
             raise ValueError(f"missing committed CSV rows: {path}")
@@ -47,9 +62,11 @@ class CsvJournal:
         self.rows = committed_rows
 
     def write(self, record: Mapping[str, Any]) -> None:
-        unknown = set(record) - set(self.fields)
+        unknown = set(record) - set(self.fields) - self.optional_fields
         if unknown:
             raise ValueError(f"unknown CSV fields: {sorted(unknown)}")
         with self.path.open("a", newline="", encoding="utf-8") as stream:
-            csv.DictWriter(stream, self.fields).writerow(record)
+            csv.DictWriter(stream, self.fields).writerow(
+                {key: value for key, value in record.items() if key in self.fields}
+            )
         self.rows += 1

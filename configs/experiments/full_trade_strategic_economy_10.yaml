@@ -1,0 +1,4 @@
+extends: full_trade_strategic_economy_05.yaml
+name: full_trade_strategic_economy_10
+env:
+  shaping_coef: 1.00

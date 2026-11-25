@@ -4,6 +4,7 @@ Ablations are single fields: `model.encoder`, `model.belief`, `model.set_attenti
 `model.trade_decoder`, `engine.allow_domestic_trade`, `opponents.pool`, `ppo.*`.
 """
 
+import math
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -32,6 +33,50 @@ class EnvConfig:
     """Discount used by the shaping; must equal `ppo.gamma` to keep the optimal policy."""
     max_events: int = 64
     """Event-stream slots per observation (belief module input); older events are dropped."""
+    strategic_vp_weight: float = 0.50
+    strategic_production_weight: float = 0.25
+    strategic_readiness_weight: float = 0.10
+    strategic_award_weight: float = 0.15
+    readiness_road_weight: float = 0.15
+    readiness_settlement_weight: float = 0.35
+    readiness_city_weight: float = 0.35
+    readiness_dev_weight: float = 0.15
+    opponent_threat_coef: float = 0.35
+    opponent_vp_weight: float = 0.56
+    opponent_production_weight: float = 0.28
+    opponent_award_weight: float = 0.16
+    award_road_weight: float = 0.50
+    award_army_weight: float = 0.50
+    production_normalization: float = 2.0
+    opponent_softmax_temperature: float = 2.0
+
+    def __post_init__(self) -> None:
+        for names in (
+            (
+                "strategic_vp_weight",
+                "strategic_production_weight",
+                "strategic_readiness_weight",
+                "strategic_award_weight",
+            ),
+            (
+                "readiness_road_weight",
+                "readiness_settlement_weight",
+                "readiness_city_weight",
+                "readiness_dev_weight",
+            ),
+            ("opponent_vp_weight", "opponent_production_weight", "opponent_award_weight"),
+            ("award_road_weight", "award_army_weight"),
+        ):
+            values = [getattr(self, name) for name in names]
+            if any(not math.isfinite(value) or value < 0 for value in values):
+                raise ValueError(f"{names}: weights must be finite and nonnegative")
+            if not math.isclose(sum(values), 1.0, rel_tol=1e-6, abs_tol=1e-6):
+                raise ValueError(f"{names}: weights must sum to one")
+        if not math.isfinite(self.opponent_threat_coef) or self.opponent_threat_coef < 0:
+            raise ValueError("opponent_threat_coef must be finite and nonnegative")
+        for name in ("production_normalization", "opponent_softmax_temperature"):
+            if not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be finite and positive")
 
 
 @dataclass(frozen=True)
@@ -72,23 +117,31 @@ class PPOConfig:
     """Semi-asynchronous PPO: accept rollouts from policies at most this many updates old."""
     sequence_length: int = 32
     """Truncated BPTT window for recurrent (belief) models."""
+    trade_entropy_coef: float | None = None
+    """Optional coefficient for trade-token entropy; None preserves the original objective."""
+
+    def __post_init__(self) -> None:
+        if self.trade_entropy_coef is not None and (
+            not math.isfinite(self.trade_entropy_coef) or self.trade_entropy_coef < 0
+        ):
+            raise ValueError("trade_entropy_coef must be finite and nonnegative or None")
 
 
 @dataclass(frozen=True)
 class OpponentSpec:
     kind: Literal[
-                "self",
-                "snapshot",
-                "random",
-                "heuristic05",
-                "heuristic10",
-                "heuristic15",
-                "heuristic25",
-                "heuristic50",
-                "heuristic75",
-                "heuristic",
-                "checkpoint",
-            ]
+        "self",
+        "snapshot",
+        "random",
+        "heuristic05",
+        "heuristic10",
+        "heuristic15",
+        "heuristic25",
+        "heuristic50",
+        "heuristic75",
+        "heuristic",
+        "checkpoint",
+    ]
     weight: float = 1.0
     path: str | None = None
     """Checkpoint file for kind == "checkpoint"."""
@@ -140,6 +193,8 @@ class RuntimeConfig:
     output_dir: str = "runs"
     checkpoint_every: int = 100
     log_every: int = 10
+    collect_training_diagnostics: bool = False
+    """Incremental learner-only episode counters; no replay, extra inference or legal queries."""
 
 
 @dataclass(frozen=True)

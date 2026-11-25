@@ -8,6 +8,7 @@ import numpy as np
 import torch
 
 from carla.config.schema import PPOConfig
+from carla.engine.actions import ActionType
 from carla.models.base import PolicyNetwork
 from carla.rl.buffer import RolloutBatch
 from carla.rl.gae import compute_gae
@@ -103,6 +104,9 @@ class PPOLearner:
                 "policy_loss",
                 "value_loss",
                 "entropy",
+                "trade_token_entropy",
+                "non_trade_entropy",
+                "entropy_bonus",
                 "approx_kl",
                 "clip_fraction",
                 "grad_norm",
@@ -110,6 +114,7 @@ class PPOLearner:
             )
         }
         early_stop = False
+        trade_entropy_sum, trade_count, action_count = 0.0, 0, 0
         for _ in range(self.config.epochs):
             for indices in torch.randperm(len(actions)).split(self.config.minibatch_size):
                 indices = indices.to(self.device)
@@ -125,11 +130,20 @@ class PPOLearner:
                 policy_loss = -torch.minimum(surrogate, clipped).mean()
                 value_loss = (out.value - returns_t[indices]).square().mean()
                 entropy = dist.entropy().mean()
-                loss = (
-                    policy_loss
-                    + self.config.value_coef * value_loss
-                    - self.config.entropy_coef * entropy
-                )
+                token_entropy = dist.trade_token_entropy()
+                trade_entropy = token_entropy.mean()
+                non_trade_entropy = entropy - trade_entropy
+                entropy_bonus = self.config.entropy_coef * entropy
+                if self.config.trade_entropy_coef is not None:
+                    entropy_bonus = (
+                        self.config.entropy_coef * non_trade_entropy
+                        + self.config.trade_entropy_coef * trade_entropy
+                    )
+                proposed = actions[indices, 0] == ActionType.PROPOSE_TRADE
+                trade_entropy_sum += float(token_entropy[proposed].detach().sum())
+                trade_count += int(proposed.sum())
+                action_count += len(indices)
+                loss = policy_loss + self.config.value_coef * value_loss - entropy_bonus
                 auxiliary = self.policy.auxiliary_loss(out, mini)
                 if auxiliary is not None:
                     loss = loss + auxiliary
@@ -152,6 +166,9 @@ class PPOLearner:
                     ("policy_loss", policy_loss),
                     ("value_loss", value_loss),
                     ("entropy", entropy),
+                    ("trade_token_entropy", trade_entropy),
+                    ("non_trade_entropy", non_trade_entropy),
+                    ("entropy_bonus", entropy_bonus),
                     ("approx_kl", approx_kl),
                     ("clip_fraction", clip_fraction),
                     ("grad_norm", grad_norm),
@@ -172,4 +189,8 @@ class PPOLearner:
         result["epochs_stopped_early"] = float(early_stop)
         result["optimizer_steps"] = len(stats["policy_loss"])
         result.update(raw_stats)
+        result["trade_token_entropy_conditional"] = (
+            trade_entropy_sum / trade_count if trade_count else 0.0
+        )
+        result["trade_proposal_fraction"] = trade_count / action_count if action_count else 0.0
         return result

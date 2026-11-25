@@ -1,0 +1,30 @@
+# Revised economic utility, 300k learner decisions; starting checkpoint intentionally unset.
+extends: full_trade_strategic.yaml
+name: full_trade_strategic_economy_05
+model:
+  hidden_dim: 256
+  gnn_layers: 4
+  belief_dim: 128
+env:
+  shaping_coef: 0.50
+  shaping_gamma: 0.999
+  strategic_vp_weight: 0.50
+  strategic_production_weight: 0.30
+  strategic_readiness_weight: 0.15
+  strategic_award_weight: 0.05
+  readiness_road_weight: 0.10
+  readiness_settlement_weight: 0.40
+  readiness_city_weight: 0.40
+  readiness_dev_weight: 0.10
+ppo:
+  total_env_steps: 300000
+  learning_rate: 1e-4
+  gamma: 0.999
+  entropy_coef: 0.01
+  trade_entropy_coef: null
+opponents:
+  pool:
+    - kind: heuristic25
+      weight: 2.0
+    - kind: heuristic50
+      weight: 1.0

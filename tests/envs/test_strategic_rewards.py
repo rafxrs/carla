@@ -298,3 +298,107 @@ def test_strategic_config_resolves_full_model_without_changing_other_settings():
     assert config.model.trade_decoder == "gru" and config.engine.allow_domestic_trade
     assert config.env.shaping == "strategic" and config.env.shaping_coef == 0.5
     assert config.env.vp_reward == 0 and config.ppo.gamma == config.env.shaping_gamma == 0.999
+
+
+def test_configurable_reward_components_and_strength(build_game):
+    config = replace(
+        STRATEGIC,
+        strategic_production_weight=0.30,
+        strategic_readiness_weight=0.15,
+        strategic_award_weight=0.05,
+        readiness_road_weight=0.10,
+        readiness_settlement_weight=0.40,
+        readiness_city_weight=0.40,
+        readiness_dev_weight=0.10,
+        award_road_weight=0.75,
+        award_army_weight=0.25,
+        production_normalization=3.0,
+        opponent_threat_coef=0.2,
+        opponent_vp_weight=0.6,
+        opponent_production_weight=0.3,
+        opponent_award_weight=0.1,
+        opponent_softmax_temperature=1.0,
+    )
+    state = build_game.state
+    state.hands[0][1] = 0
+    readiness = 0.10 * 0.5 + 0.40 * 0.75 + 0.40 + 0.10
+    assert rewards.build_readiness(state, 0, config) == pytest.approx(readiness)
+    production = sum(rewards.expected_production(state, 0)) / 3
+    award = 0.75 * 2 / 5
+    utility = 0.5 * 0.1 + 0.3 * production + 0.15 * readiness + 0.05 * award
+    assert rewards.player_utility(state, 0, config) == pytest.approx(utility)
+    state.settlements_left[1:] = [3, 1, 0]
+    expected_weights = np.exp(np.array([2, 4, 5]) - 5)
+    expected_weights /= expected_weights.sum()
+    np.testing.assert_allclose(rewards.opponent_weights(state, 0, config), expected_weights)
+    strengths = [0.6 * vp / 10 for vp in (2, 4, 5)]
+    expected = 0.5 * (utility - 0.2 * np.dot(expected_weights, strengths))
+    assert rewards.potential(build_game, 0, config) == pytest.approx(expected)
+    assert rewards.potential(build_game, 0, replace(config, shaping_coef=1.0)) == pytest.approx(
+        2 * expected
+    )
+    state.phase = Phase.GAME_OVER
+    assert rewards.potential(build_game, 0, config) == 0
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"strategic_vp_weight": -0.1},
+        {"readiness_road_weight": 0.9},
+        {"opponent_vp_weight": 0.9},
+        {"award_road_weight": 1.0},
+        {"production_normalization": 0},
+        {"opponent_softmax_temperature": -1},
+        {"opponent_threat_coef": -0.1},
+        {"strategic_vp_weight": float("nan")},
+        {"production_normalization": float("inf")},
+    ],
+)
+def test_invalid_strategic_coefficients_are_rejected(overrides):
+    with pytest.raises(ValueError, match=r"weights|positive|nonnegative"):
+        EnvConfig(**overrides)
+
+
+def test_custom_coefficients_keep_the_gamma_potential_identity():
+    from carla.engine.config import EngineConfig
+    from carla.envs import CatanEnv
+
+    config = replace(
+        STRATEGIC,
+        shaping_gamma=0.97,
+        strategic_production_weight=0.30,
+        strategic_readiness_weight=0.15,
+        strategic_award_weight=0.05,
+    )
+    shaped = CatanEnv(EngineConfig(max_turns=2), config)
+    sparse = CatanEnv(EngineConfig(max_turns=2), replace(config, shaping="none"))
+    try:
+        shaped.reset(seed=17)
+        sparse.reset(seed=17)
+        while not shaped.game.is_over:
+            previous = rewards.potential(shaped.game, shaped.learner, config)
+            action = shaped.game.legal_actions()[0]
+            _, reward, _, _, _ = shaped.step(action)
+            _, base, _, _, _ = sparse.step(action)
+            following = rewards.potential(shaped.game, shaped.learner, config)
+            assert reward - base == pytest.approx(0.97 * following - previous)
+        assert following == 0
+    finally:
+        shaped.close()
+        sparse.close()
+
+
+def test_new_experiments_differ_only_in_strength_and_name():
+    a = load_config(CONFIGS / "full_trade_strategic_economy_05.yaml")
+    b = load_config(CONFIGS / "full_trade_strategic_economy_10.yaml")
+    assert b == replace(a, name=b.name, env=replace(a.env, shaping_coef=1.0))
+    assert a.env.shaping_coef == 0.5 and a.ppo.total_env_steps == 300000
+    assert a.model.encoder == "gnn" and a.model.hidden_dim == 256 and a.model.gnn_layers == 4
+    assert a.model.belief_dim == 128 and a.model.trade_decoder == "gru" and a.model.set_attention
+    assert a.ppo.learning_rate == 1e-4 and a.ppo.entropy_coef == 0.01
+    assert a.ppo.gamma == a.env.shaping_gamma == 0.999 and a.ppo.trade_entropy_coef is None
+    assert [(spec.kind, spec.weight) for spec in a.opponents.pool] == [
+        ("heuristic25", 2),
+        ("heuristic50", 1),
+    ]

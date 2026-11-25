@@ -46,7 +46,12 @@ def _worker(conn: Connection, worker_id: int, config: ExperimentConfig, saved: d
                 config.opponents, config.runtime.num_workers, config.runtime.envs_per_worker
             )[worker_id]
             envs = [
-                CatanEnv(config.engine, config.env, [make_agent(kind) for kind in table])
+                CatanEnv(
+                    config.engine,
+                    config.env,
+                    [make_agent(kind) for kind in table],
+                    collect_training_diagnostics=config.runtime.collect_training_diagnostics,
+                )
                 for table in tables
             ]
             observations = [
@@ -60,6 +65,10 @@ def _worker(conn: Connection, worker_id: int, config: ExperimentConfig, saved: d
                 saved["observations"],
                 saved["trackers"],
             )
+            for env in envs:
+                env.configure_training_diagnostics(
+                    config.runtime.collect_training_diagnostics, partial=True
+                )
             _restore_random_state(saved["rng"])
         conn.send(("ready", None))
         while True:
@@ -83,6 +92,7 @@ def _worker(conn: Connection, worker_id: int, config: ExperimentConfig, saved: d
                 raise ValueError(f"unknown worker command: {command}")
             policy.load_state_dict(payload["weights"])
             records: list[dict] = []
+            training_records = [] if config.runtime.collect_training_diagnostics else None
             diagnostics = RolloutDiagnostics()
             active = payload["active"]
             batches, next_observations = collect_rollouts(
@@ -96,9 +106,20 @@ def _worker(conn: Connection, worker_id: int, config: ExperimentConfig, saved: d
                 diagnostics=diagnostics,
                 env_steps=payload["env_steps"],
                 env_id_offset=worker_id * config.runtime.envs_per_worker,
+                training_records=training_records,
+                worker_id=worker_id,
             )
             observations[:active] = next_observations
-            conn.send(("ok", (batches, records, diagnostics)))
+            conn.send(
+                (
+                    "ok",
+                    (
+                        (batches, records, diagnostics)
+                        if training_records is None
+                        else (batches, records, diagnostics, training_records)
+                    ),
+                )
+            )
     except BaseException:
         with suppress(BrokenPipeError, OSError):
             conn.send(("error", traceback.format_exc()))
@@ -148,7 +169,16 @@ class SynchronousRolloutPool:
             raise RuntimeError(f"unexpected rollout response: {status}")
         return value
 
-    def collect(self, policy, version: int, steps: int, active: int, env_steps: int):
+    def collect(
+        self,
+        policy,
+        version: int,
+        steps: int,
+        active: int,
+        env_steps: int,
+        *,
+        training_records: list[dict] | None = None,
+    ):
         per_worker = self.config.runtime.envs_per_worker
         weights = {key: value.detach().cpu() for key, value in policy.state_dict().items()}
         assignments = []
@@ -173,7 +203,13 @@ class SynchronousRolloutPool:
         batches, records = [], []
         diagnostics = RolloutDiagnostics()
         for connection in assignments:
-            worker_batches, worker_records, worker_diagnostics = self._receive(connection)
+            received = self._receive(connection)
+            if len(received) == 4:
+                worker_batches, worker_records, worker_diagnostics, worker_training = received
+                if training_records is not None:
+                    training_records.extend(worker_training)
+            else:
+                worker_batches, worker_records, worker_diagnostics = received
             batches.extend(worker_batches)
             records.extend(worker_records)
             diagnostics.merge(worker_diagnostics)

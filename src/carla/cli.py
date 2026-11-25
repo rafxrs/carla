@@ -7,6 +7,7 @@ import sys
 import time
 from pathlib import Path
 
+from carla.agents import AGENTS
 from carla.config import load_config, to_dict
 
 
@@ -47,19 +48,17 @@ def main(argv: list[str] | None = None) -> int:
 
     p = commands.add_parser("evaluate", help="evaluate a checkpoint with seat rotation")
     p.add_argument("checkpoint", type=Path)
-    p.add_argument(
+    opponent_options = p.add_mutually_exclusive_group()
+    opponent_options.add_argument(
         "--opponent",
-        choices=(
-            "random",
-            "heuristic05",
-            "heuristic10",
-            "heuristic15",
-            "heuristic25",
-            "heuristic50",
-            "heuristic75",
-            "heuristic",
-        ),
-        default="heuristic",
+        choices=sorted(AGENTS),
+        default=None,
+    )
+    opponent_options.add_argument(
+        "--opponents",
+        nargs=3,
+        metavar="AGENT",
+        help="three opponents assigned to non-learner seats in ascending seat order",
     )
     p.add_argument("--boards", type=int, default=10, help="held-out boards, each played in 4 seats")
     p.add_argument("--seed", type=int, default=10_000)
@@ -74,6 +73,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--sampled", action="store_true", help="sample actions instead of greedy play")
     p.add_argument("--csv", type=Path, help="append per-game records to a separate evaluation CSV")
     p.add_argument("--split", choices=("validation", "test"), default="test")
+    p.add_argument(
+        "--diagnostics",
+        action="store_true",
+        help="collect per-player trading, construction and production diagnostics",
+    )
+    p.add_argument(
+        "--diagnostics-csv",
+        type=Path,
+        help="write diagnostics and companion summary/trade/offer CSVs to new paths",
+    )
+    p.add_argument(
+        "--trajectories",
+        action="store_true",
+        help="also collect per-turn production and victory-point trajectories",
+    )
 
     p = commands.add_parser("policy-tournament", help="compare checkpoints on paired boards")
     p.add_argument("players", nargs=4, help="four checkpoint paths or random/heuristic bots")
@@ -243,11 +257,14 @@ def _evaluate(args) -> int:
     result = evaluate_checkpoint(
         args.checkpoint,
         opponent=args.opponent,
+        opponents=args.opponents,
         boards=args.boards,
         seed=args.seed,
         deterministic=not args.sampled,
         batch_games=args.batch_games,
         device=args.device,
+        diagnostics=args.diagnostics or args.diagnostics_csv is not None or args.trajectories,
+        trajectories=args.trajectories,
     )
     if args.csv is not None:
         from carla.rl.evaluate import export_evaluation
@@ -258,6 +275,15 @@ def _evaluate(args) -> int:
         f"({result.win_rate:.3f}, 95% CI [{result.ci_low:.3f}, {result.ci_high:.3f}]); "
         f"mean VP {result.mean_vp:.2f}"
     )
+    if result.diagnostics is not None:
+        import json
+
+        from carla.eval.diagnostics import export_diagnostics
+
+        print("behavioural diagnostics: " + json.dumps(result.diagnostics.summary, allow_nan=False))
+        if args.diagnostics_csv is not None:
+            for path in export_diagnostics(result.diagnostics, args.diagnostics_csv):
+                print(f"diagnostics saved: {path}")
     return 0
 
 

@@ -16,6 +16,7 @@ from carla.models.factory import build_policy
 from carla.rl.checkpoint import load_checkpoint, save_checkpoint
 from carla.rl.evaluate import evaluate_policy
 from carla.rl.metrics import (
+    ENTROPY_FIELDS,
     EPISODE_FIELDS,
     EVALUATION_FIELDS,
     UPDATE_FIELDS,
@@ -130,7 +131,12 @@ def train(
     learner = PPOLearner(policy, config.ppo, str(device))
     envs = (
         [
-            CatanEnv(config.engine, config.env, [make_agent(kind) for kind in table])
+            CatanEnv(
+                config.engine,
+                config.env,
+                [make_agent(kind) for kind in table],
+                collect_training_diagnostics=config.runtime.collect_training_diagnostics,
+            )
             for table in bot_tables(config.opponents, 1, config.runtime.envs_per_worker)[0]
         ]
         if config.runtime.num_workers == 1
@@ -186,6 +192,11 @@ def train(
     if init_from is not None:
         init_from = Path(init_from).resolve()
         _load_initial_weights(init_from, policy, config)
+    if resume is not None:
+        for env in envs:
+            env.configure_training_diagnostics(
+                config.runtime.collect_training_diagnostics, partial=True
+            )
     if resume is None and config.runtime.num_workers == 1:
         observations = [
             env.reset(
@@ -201,13 +212,32 @@ def train(
     trackers = state.get("trackers", [EpisodeTracker(partial=resume is not None) for _ in envs])
     committed = state.get("log_rows", {})
     journals = {
-        name: CsvJournal(run_dir / f"{name}.csv", fields, committed.get(name, 0))
+        name: CsvJournal(
+            run_dir / f"{name}.csv",
+            fields,
+            committed.get(name, 0),
+            optional_fields=ENTROPY_FIELDS if name == "updates" else (),
+        )
         for name, fields in (
             ("updates", UPDATE_FIELDS),
             ("episodes", EPISODE_FIELDS),
             ("evaluation_games", EVALUATION_FIELDS),
         )
     }
+    if config.runtime.collect_training_diagnostics:
+        from carla.envs.training_diagnostics import TRAINING_COUNTER_FIELDS
+
+        journals["training_diagnostics"] = CsvJournal(
+            run_dir / "training_diagnostics.csv",
+            (
+                *EPISODE_FIELDS,
+                "worker_id",
+                "policy_version",
+                "opponent_composition",
+                *TRAINING_COUNTER_FIELDS,
+            ),
+            committed.get("training_diagnostics", 0),
+        )
     save_config(config, run_dir / "config.yaml")
     metadata = record_session(run_dir, str(device), resume=resume, init_from=init_from)
     training_seconds = state.get("training_seconds", 0.0)
@@ -239,7 +269,7 @@ def train(
                 "observations": observations,
                 "trackers": trackers,
                 "worker_states": pool.snapshot() if pool is not None else None,
-                "log_rows": {k: v.rows for k, v in journals.items()},
+                "log_rows": {**committed, **{k: v.rows for k, v in journals.items()}},
                 "training_seconds": training_seconds,
                 "evaluation_seconds": evaluation_seconds,
                 "wall_seconds": wall_seconds(),
@@ -310,13 +340,19 @@ def train(
             active = min(config.runtime.num_workers * config.runtime.envs_per_worker, remaining)
             steps = min(config.ppo.rollout_steps, remaining // active)
             records = []
+            training_records = [] if config.runtime.collect_training_diagnostics else None
             diagnostics = RolloutDiagnostics()
             if device.type == "cuda":
                 torch.cuda.synchronize(device)
             start = time.perf_counter()
             if pool is not None:
                 batches, records, diagnostics = pool.collect(
-                    policy, learner.version, steps, active, env_steps
+                    policy,
+                    learner.version,
+                    steps,
+                    active,
+                    env_steps,
+                    training_records=training_records,
                 )
             else:
                 batches, next_observations = collect_rollouts(
@@ -329,6 +365,7 @@ def train(
                     episode_records=records,
                     diagnostics=diagnostics,
                     env_steps=env_steps,
+                    training_records=training_records,
                 )
                 observations[:active] = next_observations
             if device.type == "cuda":
@@ -345,6 +382,9 @@ def train(
             optimizer_steps_total += int(stats["optimizer_steps"])
             for record in records:
                 journals["episodes"].write({"update": learner.version, **record})
+            if training_records is not None:
+                for record in training_records:
+                    journals["training_diagnostics"].write({"update": learner.version, **record})
             journals["updates"].write(
                 {
                     "update": learner.version,
