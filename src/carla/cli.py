@@ -45,6 +45,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("overrides", nargs="*", help="dotted overrides, e.g. ppo.learning_rate=1e-4")
 
+    p = commands.add_parser("bc", help="behaviour-clone the heuristic bot as a PPO warm start")
+    p.add_argument("config", type=Path, help="experiment config (model, env and opponents)")
+    p.add_argument("--output", type=Path, required=True, help="directory for bc.pt")
+    p.add_argument("--games", type=int, default=600, help="expert games to record")
+    p.add_argument("--epochs", type=int, default=8)
+    p.add_argument("--learning-rate", type=float, default=3e-4)
+    p.add_argument("--minibatch-size", type=int, default=1024)
+    p.add_argument("--workers", type=int, default=1, help="processes playing expert games")
+    p.add_argument("--eval-boards", type=int, default=10, help="0 skips the final evaluation")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("overrides", nargs="*", help="dotted overrides, e.g. runtime.device=cuda")
+
     p = commands.add_parser("evaluate", help="evaluate a checkpoint with seat rotation")
     p.add_argument("checkpoint", type=Path)
     p.add_argument("--opponent", choices=("random", "heuristic"), default="heuristic")
@@ -116,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
     # Accept only KEY=VALUE tokens there; retain normal errors for unknown options.
     args, extra = parser.parse_known_args(argv)
     if extra:
-        if args.command == "train" and all(
+        if args.command in ("train", "bc") and all(
             "=" in item and not item.startswith("-") for item in extra
         ):
             args.overrides.extend(extra)
@@ -128,6 +140,7 @@ def main(argv: list[str] | None = None) -> int:
         "replay": _replay,
         "tournament": _tournament,
         "train": _train,
+        "bc": _bc,
         "evaluate": _evaluate,
         "policy-tournament": _policy_tournament,
         "config": _config,
@@ -215,6 +228,23 @@ def _train(args) -> int:
     from carla.rl.train import train
 
     train(load_config(args.config, args.overrides), resume=args.resume, init_from=args.init_from)
+    return 0
+
+
+def _bc(args) -> int:
+    from carla.rl.imitation import behaviour_clone
+
+    behaviour_clone(
+        load_config(args.config, args.overrides),
+        args.output,
+        games=args.games,
+        epochs=args.epochs,
+        learning_rate=args.learning_rate,
+        minibatch_size=args.minibatch_size,
+        workers=args.workers,
+        eval_boards=args.eval_boards,
+        seed=args.seed,
+    )
     return 0
 
 
