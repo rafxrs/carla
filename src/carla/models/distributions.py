@@ -175,19 +175,22 @@ class TradeDistribution(FactoredDistribution):
 
     def entropy(self) -> Tensor:
         """Exact head entropy plus sampled token entropy along offer prefixes."""
-        if not self._entropy_ready:
-            # The token term uses a sampled prefix; draw one if none is available yet.
-            self.sample()
+        return self.head_entropy() + self.token_entropy()
+
+    def head_entropy(self) -> Tensor:
+        """Exact entropy of the action heads, without the unused one-for-one trade subhead."""
         trade_lp = self.logp["trade"]
         safe = torch.where(torch.isfinite(trade_lp), trade_lp, 0.0)
         old_trade_entropy = -(trade_lp.exp() * safe).sum(1)
-        # Token entropy is measured along stored action prefixes. This is a sampled
-        # regularizer, not exact entropy over every possible offer.
-        return (
-            super().entropy()
-            - self.logp["type"].exp()[:, _T.PROPOSE_TRADE] * old_trade_entropy
-            + self._conditional_entropy
-        )
+        return super().entropy() - self.logp["type"].exp()[:, _T.PROPOSE_TRADE] * old_trade_entropy
+
+    def token_entropy(self) -> Tensor:
+        """Offer-token entropy summed along stored (or freshly sampled) offer prefixes: a
+        sampled regularizer, not the exact entropy over every possible offer; zero for rows
+        that are not offers."""
+        if not self._entropy_ready:
+            self.sample()  # The token term uses a sampled prefix; draw one if none exists yet.
+        return self._conditional_entropy
 
 
 def _numel(shape: tuple[int, ...]) -> int:

@@ -9,6 +9,7 @@ import torch
 
 from carla.config.schema import PPOConfig
 from carla.models.base import PolicyNetwork
+from carla.models.distributions import TradeDistribution
 from carla.rl.buffer import RolloutBatch
 from carla.rl.gae import compute_gae
 
@@ -125,11 +126,15 @@ class PPOLearner:
                 policy_loss = -torch.minimum(surrogate, clipped).mean()
                 value_loss = (out.value - returns_t[indices]).square().mean()
                 entropy = dist.entropy().mean()
-                loss = (
-                    policy_loss
-                    + self.config.value_coef * value_loss
-                    - self.config.entropy_coef * entropy
-                )
+                trade_coef = self.config.trade_entropy_coef
+                if trade_coef is None or not isinstance(dist, TradeDistribution):
+                    bonus = self.config.entropy_coef * entropy
+                else:
+                    bonus = (
+                        self.config.entropy_coef * dist.head_entropy().mean()
+                        + trade_coef * dist.token_entropy().mean()
+                    )
+                loss = policy_loss + self.config.value_coef * value_loss - bonus
                 auxiliary = self.policy.auxiliary_loss(out, mini)
                 if auxiliary is not None:
                     loss = loss + auxiliary

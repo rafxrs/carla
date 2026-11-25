@@ -63,6 +63,10 @@ class PPOConfig:
     clip_coef: float = 0.2
     value_coef: float = 0.5
     entropy_coef: float = 0.01
+    trade_entropy_coef: float | None = None
+    """Weight of the trade decoder's offer-token entropy (None: `entropy_coef`). The token term
+    sums several tokens (about 5 nats against 0.2-0.8 for other heads), so at `entropy_coef` it
+    dominates the bonus and keeps offers random; a smaller weight lets offers sharpen."""
     max_grad_norm: float = 0.5
     target_kl: float | None = None
     max_policy_lag: int = 1
