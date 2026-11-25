@@ -1,0 +1,10 @@
+# Stage 2 curriculum step: start from a stage-1 checkpoint with `--init-from` and train against
+# two random bots and one heuristic bot per table (weights 2:1), before moving to all heuristic.
+extends: full_trade_own.yaml
+name: full_trade_own_mixed
+opponents:
+  pool:
+    - kind: random
+      weight: 2.0
+    - kind: heuristic
+      weight: 1.0
