@@ -95,6 +95,8 @@ class OpponentSpec:
     weight: float = 1.0
     path: str | None = None
     """Checkpoint file for kind == "checkpoint"."""
+    name: str | None = None
+    """Label of a "checkpoint" opponent in the episode journal (default: the file stem)."""
 
 
 @dataclass(frozen=True)

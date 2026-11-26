@@ -14,8 +14,8 @@ from carla.config.schema import ExperimentConfig
 from carla.envs.catan_env import CatanEnv
 from carla.models.factory import build_policy
 from carla.rl.metrics import EpisodeTracker, RolloutDiagnostics
-from carla.rl.opponents import bot_tables
-from carla.rl.rollout import collect_rollouts, load_reference
+from carla.rl.opponents import League, bot_tables, is_league
+from carla.rl.rollout import collect_rollouts, load_reference, reset_envs
 from carla.utils.seeding import derive_seed, seed_everything
 
 
@@ -42,7 +42,25 @@ def _worker(conn: Connection, worker_id: int, config: ExperimentConfig, saved: d
         )
         policy = build_policy(config.model)
         reference = load_reference(config.ppo)
-        if saved is None:
+        league = (
+            League(
+                config.opponents,
+                config.engine,
+                config.env,
+                derive_seed(config.seed, "worker", worker_id, "league"),
+            )
+            if is_league(config.opponents)
+            else None
+        )
+        observations: list[dict] | None
+        if saved is None and league is not None:
+            envs = [
+                CatanEnv(config.engine, config.env, league.sample())
+                for _ in range(config.runtime.envs_per_worker)
+            ]
+            observations = None  # Reset once the first weights arrive: "self" seats need them.
+            trackers = [EpisodeTracker() for _ in envs]
+        elif saved is None:
             tables = bot_tables(
                 config.opponents, config.runtime.num_workers, config.runtime.envs_per_worker
             )[worker_id]
@@ -62,6 +80,8 @@ def _worker(conn: Connection, worker_id: int, config: ExperimentConfig, saved: d
                 saved["trackers"],
             )
             _restore_random_state(saved["rng"])
+            if league is not None and saved.get("league") is not None:
+                league.restore(saved["league"])
         conn.send(("ready", None))
         while True:
             command, payload = conn.recv()
@@ -76,6 +96,7 @@ def _worker(conn: Connection, worker_id: int, config: ExperimentConfig, saved: d
                             "observations": observations,
                             "trackers": trackers,
                             "rng": _random_state(),
+                            "league": None if league is None else league.state(),
                         },
                     )
                 )
@@ -83,6 +104,18 @@ def _worker(conn: Connection, worker_id: int, config: ExperimentConfig, saved: d
             if command != "collect":
                 raise ValueError(f"unknown worker command: {command}")
             policy.load_state_dict(payload["weights"])
+            if league is not None:
+                league.add_snapshot(policy, payload["version"])
+            if observations is None:
+                observations = reset_envs(
+                    envs,
+                    policy,
+                    league,
+                    [
+                        derive_seed(config.seed, "worker", worker_id, "env", i)
+                        for i in range(len(envs))
+                    ],
+                )
             records: list[dict] = []
             diagnostics = RolloutDiagnostics()
             active = payload["active"]
@@ -98,6 +131,7 @@ def _worker(conn: Connection, worker_id: int, config: ExperimentConfig, saved: d
                 env_steps=payload["env_steps"],
                 env_id_offset=worker_id * config.runtime.envs_per_worker,
                 reference=reference,
+                league=league,
             )
             observations[:active] = next_observations
             conn.send(("ok", (batches, records, diagnostics)))

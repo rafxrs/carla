@@ -8,7 +8,7 @@ it for self-play with one policy (copy) per seat.
 in the env and played automatically between the learner's decisions.
 """
 
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -111,6 +111,40 @@ class CatanAECEnv:
         }
 
 
+class ExternalAgent(Agent):
+    """An opponent seat whose decisions the caller supplies, e.g. a policy batched across envs.
+
+    `CatanEnv.reset_steps` and `step_steps` yield the seat each time it must decide; the caller
+    sends back its action (an engine `Action` or policy head indices). `key` names the network
+    that plays it and `state` holds that network's recurrent state for this seat.
+    """
+
+    def __init__(self, name: str, key: str) -> None:
+        self.name = name
+        self.key = key
+        self.state: np.ndarray | None = None
+
+    def reset(self, game: Game, seat: int, seed: int) -> None:
+        self.state = None
+
+    def act(self, game: Game, seat: int, legal: Sequence[Action]) -> Action:
+        raise RuntimeError("external opponents act through CatanEnv.reset_steps/step_steps")
+
+
+EnvSteps = Generator[int, Any, Any]
+"""Yields each external seat that must decide; receives its action; returns the env result."""
+
+
+def run_steps(steps: EnvSteps) -> Any:
+    """Drive `steps` to its result; it must not need an external decision."""
+    try:
+        seat = next(steps)
+    except StopIteration as stop:
+        return stop.value
+    steps.close()
+    raise RuntimeError(f"seat {seat} is an ExternalAgent; drive reset_steps/step_steps instead")
+
+
 class _LegalActionSpace(spaces.MultiDiscrete):
     """Sample a legal head vector for the environment's current learner decision."""
 
@@ -138,7 +172,8 @@ class CatanEnv(gym.Env):
     Actions are head indices (`MultiDiscrete` in `HEAD_NAMES` order, unused heads are `-1`) or
     engine `Action`s; illegal actions raise `IllegalActionError`. `info["legal_actions"]` lists
     the learner's legal actions and `info["hidden_truth"]` the opponents' cards. Use
-    `TradeActionWrapper` to declare decoder actions to Gymnasium clients.
+    `TradeActionWrapper` to declare decoder actions to Gymnasium clients. `ExternalAgent`
+    opponents are played by the caller through `reset_steps` and `step_steps`.
     """
 
     metadata = {"render_modes": ["ansi"]}  # noqa: RUF012 (gymnasium API)
@@ -168,7 +203,17 @@ class CatanEnv(gym.Env):
     def game(self) -> Game:
         return self.aec.game
 
+    def seat_agent(self, seat: int) -> Agent:
+        return self._seat_agents[seat]
+
     def reset(self, *, seed: int | None = None, options: dict | None = None):
+        return run_steps(self.reset_steps(seed=seed, options=options))
+
+    def step(self, action):
+        return run_steps(self.step_steps(action))
+
+    def reset_steps(self, *, seed: int | None = None, options: dict | None = None) -> EnvSteps:
+        """`reset` that yields to the caller whenever an `ExternalAgent` seat must decide."""
         super().reset(seed=seed)
         game_seed = int(self.np_random.integers(2**62))
         seat = self.config.learner_seat
@@ -178,15 +223,16 @@ class CatanEnv(gym.Env):
         self._seat_agents = dict(zip(others, self.opponents, strict=True))
         for p, agent in self._seat_agents.items():
             agent.reset(self.game, p, derive_seed(game_seed, "seat", p))
-        _, obs = self._play_opponents(0.0)
+        _, obs = yield from self._play_opponents(0.0)
         self._potential = potential(self.game, self.learner, self.config)
         return obs, self._info()
 
-    def step(self, action):
+    def step_steps(self, action) -> EnvSteps:
+        """`step` that yields to the caller whenever an `ExternalAgent` seat must decide."""
         if self.game.is_over or self.game.decision_player != self.learner:
             raise RuntimeError("the episode is over; call reset()")
         result = self.aec.step(action)
-        reward, obs = self._play_opponents(float(result.rewards[self.learner]))
+        reward, obs = yield from self._play_opponents(float(result.rewards[self.learner]))
         if self.config.shaping != "none":
             # F = gamma * Phi(s') - Phi(s) between consecutive learner decisions; Phi = 0 at the end.
             next_potential = potential(self.game, self.learner, self.config)
@@ -195,12 +241,16 @@ class CatanEnv(gym.Env):
         over, truncated = self.game.is_over, self.game.is_truncated
         return obs, reward, over and not truncated, truncated, self._info()
 
-    def _play_opponents(self, reward: float) -> tuple[float, dict]:
+    def _play_opponents(self, reward: float) -> Generator[int, Any, tuple[float, dict]]:
         """Let opponents act until the learner must decide or the game ends."""
         game = self.game
         while not game.is_over and game.decision_player != self.learner:
             seat = game.decision_player
-            action = self._seat_agents[seat].act(game, seat, game.legal_actions())
+            agent = self._seat_agents[seat]
+            if isinstance(agent, ExternalAgent):
+                action = yield seat
+            else:
+                action = agent.act(game, seat, game.legal_actions())
             reward += float(self.aec.step(action).rewards[self.learner])
         return reward, self.aec.observe(self.learner)
 
