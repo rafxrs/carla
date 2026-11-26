@@ -19,12 +19,17 @@ class EnvConfig:
     truncation_reward: float = 0.0
     vp_reward: float = 0.0
     """Shaping: reward per public victory point gained (0 disables)."""
-    shaping: Literal["none", "own", "margin"] = "none"
+    shaping: Literal["none", "own", "margin", "production"] = "none"
     """Potential-based shaping in `CatanEnv`: F = gamma * Phi(s') - Phi(s) between consecutive
     learner decisions, with Phi = 0 once the game is over, so the optimal policy is unchanged.
     own: Phi = shaping_coef * own VP (own hidden VP cards included); margin: Phi = shaping_coef *
-    (own VP - the top opponent's public VP)."""
+    (own VP - the top opponent's public VP); production: Phi = shaping_coef * (own VP +
+    production_weight * own expected resources per round), crediting settlements and cities for
+    their future income as soon as they are built."""
     shaping_coef: float = 0.1
+    production_weight: float = 0.5
+    """VP-equivalent of one expected resource per round (four rolls) for `shaping=production`.
+    An average settlement yields about 1.1 resources per round, so it is worth about 0.55 VP."""
     shaping_gamma: float = 0.999
     """Discount used by the shaping; must equal `ppo.gamma` to keep the optimal policy."""
     max_events: int = 64

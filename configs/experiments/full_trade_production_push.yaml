@@ -1,0 +1,12 @@
+# Fork of full_trade_production_heuristic that pushes expansion and takes larger steps. The 7M
+# policy builds about one settlement and one city per game and produces 29% fewer cards than
+# the heuristic bots, and nearly every update was gradient-clipped (norm about 0.7 > 0.5).
+# Doubling production_weight credits a building's future income twice as much (still
+# potential-based); max_grad_norm 1.0 stops clipping most updates. Start from that checkpoint:
+#   carla train <this> --init-from runs/.../checkpoints/step_000007003136.pt
+extends: full_trade_production_heuristic.yaml
+name: full_trade_production_push
+env:
+  production_weight: 1.0
+ppo:
+  max_grad_norm: 1.0
