@@ -1,0 +1,6 @@
+# Same as full_trade_production_bc_kl with a four times stronger pull toward the behaviour
+# clone's action-type choices (the fork starts about 1.6 nats away from it per decision).
+extends: full_trade_production_bc_kl.yaml
+name: full_trade_production_bc_kl_strong
+ppo:
+  reference_kl_coef: 0.2

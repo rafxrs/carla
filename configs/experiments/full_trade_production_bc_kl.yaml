@@ -1,0 +1,11 @@
+# The PPO policy never ends its turn while it can afford something (the behaviour clone does in
+# about 28% of those turns), so it never saves up for settlements and cities and stronger
+# production shaping alone did not change that. A KL(behaviour clone || policy) penalty on the
+# action type keeps probability on the clone's choices, including passing to save; the rest of
+# the decision (where to build, trades, dev cards) stays free. Start from the push fork:
+#   carla train <this> --init-from runs/full_trade_production_push/.../step_000003003392.pt
+extends: full_trade_production_push.yaml
+name: full_trade_production_bc_kl
+ppo:
+  reference_checkpoint: C:/Users/rafae/vscode/carla/runs/bc/full_model_heuristic/bc.pt
+  reference_kl_coef: 0.05

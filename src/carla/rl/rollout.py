@@ -10,10 +10,50 @@ from collections.abc import Sequence
 import numpy as np
 import torch
 
+from carla.config.loader import from_dict
+from carla.config.schema import ExperimentConfig, PPOConfig
 from carla.envs.catan_env import CatanEnv
 from carla.models.base import TARGET_KEY, PolicyNetwork, batch_observations, with_state
+from carla.models.factory import build_policy
 from carla.rl.buffer import RolloutBatch
 from carla.rl.metrics import EpisodeTracker, RolloutDiagnostics
+
+REFERENCE_STATE_KEY = "reference_state"
+"""Observation entry holding the reference policy's own recurrent state before the decision."""
+REFERENCE_TYPE_KEY = "reference_type_logp"
+"""Stored observation entry: the reference policy's masked action-type log-probabilities."""
+
+
+def load_reference(config: PPOConfig, device: torch.device | str = "cpu") -> PolicyNetwork | None:
+    """The frozen reference policy of `ppo.reference_checkpoint`, or None when it is unused.
+
+    The reference keeps its own architecture (from the checkpoint's config) and recurrent state,
+    so any policy that reads the same observations can serve, e.g. a behaviour clone.
+    """
+    if config.reference_kl_coef <= 0:
+        return None
+    if config.reference_checkpoint is None:
+        raise ValueError("ppo.reference_kl_coef needs ppo.reference_checkpoint")
+    data = torch.load(config.reference_checkpoint, map_location="cpu", weights_only=False)
+    if data.get("config") is None:
+        raise ValueError(
+            f"reference checkpoint has no experiment config: {config.reference_checkpoint}"
+        )
+    reference = build_policy(from_dict(ExperimentConfig, data["config"]).model)
+    reference.load_state_dict(data["policy"])
+    reference.requires_grad_(False)
+    return reference.to(device).eval()
+
+
+def _with_reference_state(reference: PolicyNetwork, obs: dict, state: np.ndarray | None) -> dict:
+    """`obs` carrying the reference's state (zeros at an episode start or when missing)."""
+    if not reference.recurrent:
+        return obs
+    if state is None:
+        if REFERENCE_STATE_KEY in obs:
+            return obs
+        state = np.zeros(reference.state_dim, dtype=np.float32)
+    return {**obs, REFERENCE_STATE_KEY: np.asarray(state, dtype=np.float32)}
 
 
 @torch.no_grad()
@@ -30,11 +70,14 @@ def collect_rollouts(
     diagnostics: RolloutDiagnostics | None = None,
     env_steps: int = 0,
     env_id_offset: int = 0,
+    reference: PolicyNetwork | None = None,
 ) -> tuple[list[RolloutBatch], list[dict]]:
     """Collect `num_steps` decisions per env, retaining independent episode boundaries.
 
     Recurrent policies carry their state inside the returned observations (see `with_state`),
-    and every stored observation also holds the belief targets (`TARGET_KEY`).
+    and every stored observation also holds the belief targets (`TARGET_KEY`). With a
+    `reference` policy, each stored decision also holds its action-type log-probabilities
+    (`REFERENCE_TYPE_KEY`), and the reference carries its own state the same way.
     """
     if not envs or num_steps <= 0:
         raise ValueError("need at least one environment and a positive num_steps")
@@ -58,6 +101,8 @@ def collect_rollouts(
             with_state(policy, _with_target(obs, env))
             for obs, env in zip(current, envs, strict=True)
         ]
+    if reference is not None:
+        current = [_with_reference_state(reference, obs, None) for obs in current]
     device = next(policy.parameters()).device
     policy.eval()
     n = len(envs)
@@ -78,8 +123,20 @@ def collect_rollouts(
         head_arrays = heads.cpu().numpy()
         value_arrays = out.value.cpu().numpy()
         next_states = out.state.cpu().numpy() if out.state is not None else None
+        reference_types = reference_states = None
+        if reference is not None:
+            ref_out = reference(
+                batch, batch[REFERENCE_STATE_KEY].float() if reference.recurrent else None
+            )
+            ref_dist = ref_out.distribution(batch["masks"])
+            reference_types = ref_dist.logp["type"].float().cpu().numpy()
+            if ref_out.state is not None:
+                reference_states = ref_out.state.cpu().numpy()
         for i, env in enumerate(envs):
-            steps[i].append(current[i])
+            stored = current[i]
+            if reference_types is not None:
+                stored = {**stored, REFERENCE_TYPE_KEY: reference_types[i]}
+            steps[i].append(stored)
             actions[i].append(head_arrays[i])
             log_probs[i].append(float(logp_arrays[i]))
             values[i].append(float(value_arrays[i]))
@@ -99,6 +156,12 @@ def collect_rollouts(
                 obs = _with_target(obs, env)
                 obs = with_state(
                     policy, obs, None if done or next_states is None else next_states[i]
+                )
+            if reference is not None:
+                obs = _with_reference_state(
+                    reference,
+                    obs,
+                    None if done or reference_states is None else reference_states[i],
                 )
             current[i] = obs
     last_values = policy(batch_observations(current, device=device)).value.cpu().numpy()

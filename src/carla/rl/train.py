@@ -25,7 +25,7 @@ from carla.rl.metrics import (
 from carla.rl.opponents import bot_tables
 from carla.rl.ppo import PPOLearner
 from carla.rl.process_rollouts import SynchronousRolloutPool
-from carla.rl.rollout import collect_rollouts
+from carla.rl.rollout import collect_rollouts, load_reference
 from carla.utils.logging import CsvJournal, write_json
 from carla.utils.runs import create_run_dir, record_session
 from carla.utils.seeding import derive_seed, seed_everything
@@ -75,6 +75,12 @@ def _validate(config: ExperimentConfig) -> None:
         raise ValueError("torch_threads_per_worker must be positive")
     if not 0 <= config.ppo.gae_lambda <= 1 or not 0 <= config.ppo.gamma <= 1:
         raise ValueError("gamma and gae_lambda must be between zero and one")
+    if config.ppo.micro_batch_size is not None and config.ppo.micro_batch_size <= 0:
+        raise ValueError("ppo.micro_batch_size must be positive")
+    if config.ppo.reference_kl_coef < 0:
+        raise ValueError("ppo.reference_kl_coef cannot be negative")
+    if config.ppo.reference_kl_coef > 0 and config.ppo.reference_checkpoint is None:
+        raise ValueError("ppo.reference_kl_coef needs ppo.reference_checkpoint")
     if config.env.shaping != "none" and config.env.shaping_gamma != config.ppo.gamma:
         raise ValueError("env.shaping_gamma must equal ppo.gamma for potential-based shaping")
     if config.eval.every_env_steps < 0 or config.eval.boards <= 0:
@@ -128,6 +134,8 @@ def train(
     device = resolve_device(config.runtime.device)
     policy = build_policy(config.model)
     learner = PPOLearner(policy, config.ppo, str(device))
+    # Worker processes load their own reference; only in-process collection needs this one.
+    reference = load_reference(config.ppo, device) if config.runtime.num_workers == 1 else None
     envs = (
         [
             CatanEnv(config.engine, config.env, [make_agent(kind) for kind in table])
@@ -150,7 +158,10 @@ def train(
             if saved[section] != current[section]:
                 raise ValueError(f"resume config mismatch: {section}")
         for key in current["ppo"]:
-            if key != "total_env_steps" and saved["ppo"][key] != current["ppo"][key]:
+            # Neither the step budget nor gradient accumulation changes what a run learns.
+            if key in ("total_env_steps", "micro_batch_size"):
+                continue
+            if saved["ppo"][key] != current["ppo"][key]:
                 raise ValueError(f"resume config mismatch: ppo.{key}")
         if saved["runtime"]["num_workers"] != current["runtime"]["num_workers"]:
             raise ValueError("resume config mismatch: runtime.num_workers")
@@ -329,6 +340,7 @@ def train(
                     episode_records=records,
                     diagnostics=diagnostics,
                     env_steps=env_steps,
+                    reference=reference,
                 )
                 observations[:active] = next_observations
             if device.type == "cuda":

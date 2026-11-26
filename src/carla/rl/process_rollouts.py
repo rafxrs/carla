@@ -15,7 +15,7 @@ from carla.envs.catan_env import CatanEnv
 from carla.models.factory import build_policy
 from carla.rl.metrics import EpisodeTracker, RolloutDiagnostics
 from carla.rl.opponents import bot_tables
-from carla.rl.rollout import collect_rollouts
+from carla.rl.rollout import collect_rollouts, load_reference
 from carla.utils.seeding import derive_seed, seed_everything
 
 
@@ -41,6 +41,7 @@ def _worker(conn: Connection, worker_id: int, config: ExperimentConfig, saved: d
             derive_seed(config.seed, "worker", worker_id), config.runtime.deterministic_torch
         )
         policy = build_policy(config.model)
+        reference = load_reference(config.ppo)
         if saved is None:
             tables = bot_tables(
                 config.opponents, config.runtime.num_workers, config.runtime.envs_per_worker
@@ -96,6 +97,7 @@ def _worker(conn: Connection, worker_id: int, config: ExperimentConfig, saved: d
                 diagnostics=diagnostics,
                 env_steps=payload["env_steps"],
                 env_id_offset=worker_id * config.runtime.envs_per_worker,
+                reference=reference,
             )
             observations[:active] = next_observations
             conn.send(("ok", (batches, records, diagnostics)))

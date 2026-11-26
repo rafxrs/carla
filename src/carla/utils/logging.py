@@ -17,18 +17,24 @@ class CsvJournal:
     """Flush each record; on resume remove rows not committed by the checkpoint.
 
     A backup preserves any discarded tail. Refuse missing committed records instead of
-    silently reporting an incomplete experiment. One training process owns each journal.
+    silently reporting an incomplete experiment. One training process owns each journal. A
+    journal written before fields were added is rewritten with the new header, leaving the new
+    fields empty in its old rows; any other schema difference is refused.
     """
 
     def __init__(self, path: Path, fields: Sequence[str], committed_rows: int = 0) -> None:
         self.path = path
         self.fields = list(fields)
         rows = []
+        upgrade = False
         if path.exists():
             with path.open(newline="", encoding="utf-8") as stream:
                 reader = csv.DictReader(stream)
                 if reader.fieldnames != self.fields:
-                    raise ValueError(f"CSV schema mismatch: {path}")
+                    old = reader.fieldnames or []
+                    if old != [f for f in self.fields if f in old] or not old:
+                        raise ValueError(f"CSV schema mismatch: {path}")
+                    upgrade = True
                 rows = list(reader)
         if len(rows) < committed_rows:
             raise ValueError(f"missing committed CSV rows: {path}")
@@ -37,7 +43,7 @@ class CsvJournal:
         if len(rows) > committed_rows:
             backup = path.with_suffix(".csv.recovery.bak")
             backup.write_bytes(path.read_bytes())
-        if not path.exists() or len(rows) != committed_rows:
+        if not path.exists() or len(rows) != committed_rows or upgrade:
             temporary = path.with_suffix(".csv.tmp")
             with temporary.open("w", newline="", encoding="utf-8") as stream:
                 writer = csv.DictWriter(stream, self.fields)

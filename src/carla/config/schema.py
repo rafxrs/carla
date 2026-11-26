@@ -62,6 +62,9 @@ class PPOConfig:
     """Decisions collected per environment before sending a batch to the learner."""
     epochs: int = 4
     minibatch_size: int = 4096
+    micro_batch_size: int | None = None
+    """Split each minibatch into chunks of this many decisions and accumulate their gradients
+    (None: one pass). The update is unchanged; peak GPU memory shrinks with the chunk."""
     learning_rate: float = 3e-4
     gamma: float = 0.999
     gae_lambda: float = 0.95
@@ -72,6 +75,12 @@ class PPOConfig:
     """Weight of the trade decoder's offer-token entropy (None: `entropy_coef`). The token term
     sums several tokens (about 5 nats against 0.2-0.8 for other heads), so at `entropy_coef` it
     dominates the bonus and keeps offers random; a smaller weight lets offers sharpen."""
+    reference_checkpoint: str | None = None
+    """Checkpoint (e.g. a behaviour clone) whose action-type choices regularize the policy."""
+    reference_kl_coef: float = 0.0
+    """Weight of KL(reference || policy) over the action type. The forward direction keeps
+    probability on every type the reference plays (such as ending the turn to save up), which
+    an entropy bonus cannot do for types the policy has driven to near-zero probability."""
     max_grad_norm: float = 0.5
     target_kl: float | None = None
     max_policy_lag: int = 1
