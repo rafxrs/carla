@@ -71,6 +71,17 @@ EPISODE_FIELDS = (
     "turns",
     "victory_points",
 )
+ACTION_FIELDS = (
+    "action_end_turn",
+    "action_build_road",
+    "action_build_settlement",
+    "action_build_city",
+    "action_buy_dev_card",
+    "action_play_dev_card",
+    "action_maritime_trade",
+    "action_propose_trade",
+    "action_multi_card_offer",
+)
 EVALUATION_FIELDS = (
     "update",
     "env_steps",
@@ -91,6 +102,7 @@ EVALUATION_FIELDS = (
     "learner_decisions",
     "turns",
     "victory_points",
+    *ACTION_FIELDS,
 )
 
 

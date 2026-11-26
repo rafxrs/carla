@@ -1,5 +1,5 @@
 # Synchronous batched-environment MLP PPO against three fixed random bots per env.
-extends: ../base.yaml
+extends: evaluated_base.yaml
 name: ppo_mlp_baseline
 ppo:
   total_env_steps: 100000
@@ -8,8 +8,10 @@ ppo:
 opponents:
   pool:
     - kind: random
+eval:
+  every_env_steps: 20000
 runtime:
   num_workers: 1
   envs_per_worker: 4
-  checkpoint_every: 100
+  checkpoint_every: 20
   log_every: 5

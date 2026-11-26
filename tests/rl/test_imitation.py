@@ -1,3 +1,7 @@
+import csv
+import subprocess
+import sys
+
 import numpy as np
 import pytest
 import torch
@@ -84,6 +88,36 @@ def test_behaviour_clone_lowers_expert_nll_and_seeds_ppo(tmp_path):
     assert _nll(trained, data) < _nll(fresh, data) - 0.2
     agent = PolicyAgent(path)
     assert agent.config.model == MODEL
+    with (tmp_path / "bc_metrics.csv").open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    assert len(rows) == 6 and all(float(row["nll"]) >= 0 for row in rows)
+
+
+def test_bc_before_after_report_uses_paired_games(tmp_path):
+    config = ExperimentConfig(
+        engine=EngineConfig(max_turns=2),
+        model=ModelConfig(hidden_dim=16, mlp_layers=1),
+        opponents=OpponentPoolConfig(pool=(OpponentSpec(kind="random"),)),
+        runtime=RuntimeConfig(device="cpu"),
+    )
+    behaviour_clone(config, tmp_path / "bc", games=1, epochs=1, eval_boards=1)
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/analyze_bc.py",
+            str(tmp_path / "bc"),
+            "--output",
+            str(tmp_path / "report"),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "BC figures" in completed.stdout
+    assert (tmp_path / "report" / "bc_before_after.png").stat().st_size > 1000
+    with (tmp_path / "report" / "bc_summary.csv").open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    assert len(rows) == 4 and all(int(row["games"]) == 4 for row in rows)
 
 
 def _nll(policy, data) -> float:

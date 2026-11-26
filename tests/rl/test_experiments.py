@@ -15,6 +15,7 @@ from carla.models.factory import build_policy
 from carla.rl.checkpoint import rng_state, save_checkpoint
 from carla.rl.evaluate import evaluate_policy, export_evaluation
 from carla.rl.experiments import run_sweep
+from carla.rl.metrics import ACTION_FIELDS
 from carla.rl.policy_tournament import run_policy_tournament
 from carla.rl.train import train
 from carla.utils.logging import CsvJournal
@@ -38,6 +39,17 @@ def tiny_config(output, *, evaluation=False, steps=32):
 
 def weights(path):
     return torch.load(path, weights_only=False)["policy"]
+
+
+def test_long_experiment_configs_enable_validation():
+    for name in ("mlp", "gnn", "full_trade", "full_trade_own", "full_trade_margin"):
+        cfg = load_config(Path("configs/experiments") / f"{name}.yaml")
+        assert cfg.eval.every_env_steps == 1_000_000
+        assert cfg.eval.opponents == ("random", "heuristic")
+        assert not cfg.eval.retain_checkpoints
+    baseline = load_config("configs/experiments/ppo_mlp_baseline.yaml")
+    assert baseline.eval.every_env_steps == 20_000
+    assert baseline.runtime.checkpoint_every == 20
 
 
 def test_csv_recovery_preserves_committed_rows_and_backs_up_tail(tmp_path):
@@ -85,6 +97,9 @@ def test_evaluation_preserves_weights_rng_modes_and_board_pairing(deterministic,
         records = [r for r in first.records if r["board"] == board]
         assert {r["seat"] for r in records} == set(range(4))
         assert len({r["game_seed"] for r in records}) == 1
+    for record in first.records:
+        assert all(0 <= record[field] <= record["learner_decisions"] for field in ACTION_FIELDS)
+        assert record["action_multi_card_offer"] <= record["action_propose_trade"]
 
 
 def test_telemetry_and_evaluation_do_not_change_training(tmp_path):
@@ -110,6 +125,19 @@ def test_telemetry_and_evaluation_do_not_change_training(tmp_path):
     assert {int(r["env_steps"]) for r in games} == {0, 16, 32}
     assert all((evaluated / r["checkpoint"]).exists() for r in games)
     assert len(games) == 12
+
+
+def test_analysis_keeps_warm_starts_separate_from_scratch(tmp_path):
+    cfg = tiny_config(tmp_path / "scratch", evaluation=True, steps=8)
+    scratch = train(cfg)
+    warm = train(
+        replace(cfg, runtime=replace(cfg.runtime, output_dir=str(tmp_path / "warm"))),
+        init_from=scratch / "latest.pt",
+    )
+    analyze_runs([scratch, warm], tmp_path / "comparison")
+    rows = read_csv(tmp_path / "comparison" / "configuration_summary.csv")
+    assert len(rows) == 2
+    assert {row["label"].endswith("warm start)") for row in rows} == {False, True}
 
 
 def test_validation_without_retained_snapshots_keeps_resume_and_curves(tmp_path, monkeypatch):
@@ -278,8 +306,18 @@ def test_sweep_analysis_and_separate_test_exports(tmp_path):
     summaries = read_csv(tmp_path / "analysis" / "configuration_summary.csv")
     assert len(summaries) == 4 and all(int(r["training_seeds"]) == 1 for r in summaries)
     assert (tmp_path / "analysis" / "training_diagnostics.png").stat().st_size > 1000
+    assert (tmp_path / "analysis" / "evaluation_strategy_random_greedy.png").stat().st_size > 1000
+    assert "Win rate" in (tmp_path / "analysis" / "report.md").read_text(encoding="utf-8")
+    assert (
+        "action_build_road_per_100_decisions"
+        in read_csv(tmp_path / "analysis" / "evaluation_points.csv")[0]
+    )
     test_report = analyze_runs([root], tmp_path / "test_analysis", split="test")
     assert test_report["runs"] == 4
+    assert all(
+        row["mean_win_rate_change"] == ""
+        for row in read_csv(tmp_path / "test_analysis" / "configuration_summary.csv")
+    )
     # Corrupt logs must be rejected instead of silently double-counting observations.
     rows = read_csv(paths[0] / "updates.csv")
     with (paths[0] / "updates.csv").open("a", newline="", encoding="utf-8") as stream:

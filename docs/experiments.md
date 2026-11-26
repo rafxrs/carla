@@ -1,9 +1,18 @@
-# MLP PPO experiments and analysis
+# Training experiments and analysis
 
 Each training run saves CSV metrics, the resolved config, and hardware/software details.
 No additional dependencies beyond the existing project extras are needed.
 Commands below run from the repository root; `uv run --no-sync` uses the installed CPU or
 CUDA environment without changing extras.
+
+Long MLP, GNN and full-model experiment configs inherit `evaluated_base.yaml`: validation
+every 1 million learner decisions against random and heuristic bots, ten boards in four
+seats per opponent, with no retained validation checkpoints. That is about 51 evaluation
+points and 4,080 validation games for a 50-million-decision run; benchmark the cost before
+scaling up. `latest.pt` is rewritten every 50 updates (about 409,600 decisions with 32
+environments and 256 rollout steps). The 100,000-decision MLP baseline instead validates
+every 20,000 decisions and saves every 20 updates (about 20,480 decisions with four envs).
+The final test still uses a different seed and more boards.
 
 ## Quick smoke run
 
@@ -13,7 +22,35 @@ uv run --no-sync python scripts/analyze_runs.py runs/pilot --output outputs/pilo
 ```
 
 This checks that training, evaluation, and plotting run end to end. The budget is too small
-to measure playing strength. Inspect `configuration_summary.csv`, `report.json`, and the PNG figures.
+to measure playing strength. Inspect `report.md`, `configuration_summary.csv`, and the PNG figures.
+
+## Behaviour cloning and reward study
+
+Run cloning before PPO, then compare it with a scratch run on the same validation boards.
+The cloning command saves `bc_metrics.csv` (expert action loss, action-type accuracy and value
+loss by epoch) and `bc_evaluation_games.csv` (before/after outcomes on the same boards and seats).
+It evaluates against random and heuristic bots; `--eval-boards 0` skips this check.
+
+```powershell
+uv run --no-sync carla bc configs/experiments/full_trade.yaml --output runs/bc-full --games 600 --epochs 8 --eval-boards 10
+uv run --no-sync python scripts/analyze_bc.py runs/bc-full --output outputs/bc-full
+uv run --no-sync carla train configs/experiments/full_trade.yaml --init-from runs/bc-full/bc.pt name=full_trade_bc
+uv run --no-sync carla train configs/experiments/full_trade.yaml name=full_trade_scratch
+```
+
+Set the same PPO budget, validation settings and training seeds in both arms. Give each arm
+a distinct `name`; analysis keeps their seed groups separate. The step-zero PPO validation
+then measures the cloned and random-initialized policies before PPO changes either one.
+Do not use the BC evaluation boards to select BC hyperparameters and call them final test
+results. Reserve new board seeds for the final test.
+
+The reward study uses `full_trade.yaml` (terminal reward), `full_trade_own.yaml` (potential
+on own victory points), and `full_trade_margin.yaml` (potential on VP margin). The shaping
+discount must equal PPO gamma. Compare held-out win rate and VP at equal decision budgets;
+`nonzero_reward_fraction` in `training_diagnostics.png` shows how often rollouts received
+a nonzero reward, while `episodes.csv` gives completed-game outcomes. Imitation loss, reward
+density and PPO losses diagnose learning but do not replace held-out games. The mixed and
+heuristic opponent configs are curriculum stages and need separate labels and checkpoints.
 
 ## Gamma, lambda, and rollout study
 
@@ -68,12 +105,13 @@ Each run contains:
   actual completion decision, seat, opponents, win/loss/truncation, accumulated return,
   learner decisions, turns, and final VP. Accumulators span rollouts and checkpoints.
 * `evaluation_games.csv`: one row per validation game, with actual training decisions,
-  board/game seed, seat, opponent, greedy/sampled mode and outcome. The checkpoint field
+  board/game seed, seat, opponent, greedy/sampled mode, outcome and counts of selected
+  actions (builds, development cards, trades, end turns). The checkpoint field
   is blank when retention is disabled because `latest.pt` can later be overwritten.
 * `latest.pt`: the resumable training checkpoint, rewritten every
   `runtime.checkpoint_every` updates and on completion, plus an initial save when validation
-  is enabled. The baseline's 100-update interval is about 102,400 decisions with four
-  environments and 256 steps each (roughly 3.4 minutes at 500 decisions/s).
+  is enabled. The MLP baseline's 20-update interval is about 20,480 decisions with four
+  environments and 256 steps each (roughly 40 seconds at 500 decisions/s).
 * `checkpoints/step_XXXXXXXXXXXX.pt`: optional full checkpoints at validation points,
   including step zero, when `eval.retain_checkpoints=true`. At a 20,480-decision interval,
   a 50-million-decision run would retain roughly 2,442 files. A 4,096-decision CPU pilot
@@ -145,13 +183,20 @@ Outputs include:
 * `evaluation_points.csv`: results at each validation point.
 * `run_summary.csv`: each run's last evaluation per opponent/mode.
 * `configuration_summary.csv`: equal-weight training-seed means, observed seed range/std,
-  and exploratory hierarchical bootstrap intervals (runs then boards, four seats together).
+  change from step-zero validation, and exploratory hierarchical bootstrap intervals
+  (runs then boards, four seats together). The change is blank for final test exports,
+  which have no step-zero test evaluation.
 * PNGs: win rate/VP/truncation curves against decisions and wall time, optimizer/entropy
-  diagnostics, and rolling training-episode returns/VP/turns/truncations.
+  diagnostics, nonzero reward frequency, held-out action-mix curves, and rolling
+  training-episode returns/VP/turns/truncations.
+* `report.md`: a readable index of final evaluation rows, plots and interpretation limits.
 * `report.json`: data warnings and interpretation limits.
 
 Thin curves show individual seeds. Shading is their observed range, not a confidence
 interval. Aggregate curves interpolate only over common support, with no extrapolation.
+Action-mix curves are actions per 100 learner decisions. Trade offers are attempts, not
+successful exchanges. Setup and later actions are both counted, so the mix can change as
+games grow longer; read it alongside VP, game length, and win rate rather than as a score.
 Three training seeds are exploratory evidence; narrow or degenerate bootstrap intervals,
 especially with unanimous outcomes, do not establish certainty. Summaries use the last
 evaluation, not whichever validation point happened to score highest. Do not select

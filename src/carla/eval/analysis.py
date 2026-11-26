@@ -10,6 +10,7 @@ import numpy as np
 
 from carla.config import config_hash, load_config, to_dict
 from carla.eval.plots import draw_curves
+from carla.rl.metrics import ACTION_FIELDS
 from carla.utils.logging import write_json
 
 
@@ -66,13 +67,15 @@ def load_run(path: Path, include_incomplete: bool = False) -> dict:
         raise ValueError(f"incomplete run (use --include-incomplete for exploratory plots): {path}")
     canonical = to_dict(config)
     canonical.pop("seed")
-    canonical.pop("name")
+    warm_start = bool(metadata.get("sessions", [{}])[0].get("init_from"))
+    canonical["warm_start"] = warm_start
     for key in ("output_dir", "checkpoint_every", "log_every"):
         canonical["runtime"].pop(key)
     identity = config_hash(canonical)
     label = (
-        f"g={config.ppo.gamma:g}, l={config.ppo.gae_lambda:g}, "
-        f"T={config.ppo.rollout_steps}, N={config.runtime.num_workers * config.runtime.envs_per_worker} [{identity}]"
+        f"{config.name} (gamma={config.ppo.gamma:g}, lambda={config.ppo.gae_lambda:g}, "
+        f"T={config.ppo.rollout_steps}, N={config.runtime.num_workers * config.runtime.envs_per_worker}"
+        f"{', warm start' if warm_start else ''})"
     )
     notices = []
     if not complete:
@@ -106,7 +109,8 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
     if not rows:
         return
     with path.open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.DictWriter(stream, list(rows[0]))
+        fields = list(dict.fromkeys(key for row in rows for key in row))
+        writer = csv.DictWriter(stream, fields)
         writer.writeheader()
         writer.writerows(rows)
 
@@ -218,10 +222,30 @@ def analyze_runs(
                 "mean_vp": np.mean([float(r["victory_points"]) for r in records]),
                 "mean_turns": np.mean([float(r["turns"]) for r in records]),
             }
+            if all(all(row.get(field, "") != "" for field in ACTION_FIELDS) for row in records):
+                decisions = sum(int(row["learner_decisions"]) for row in records)
+                if decisions:
+                    point.update(
+                        {
+                            f"{field}_per_100_decisions": 100
+                            * sum(int(r[field]) for r in records)
+                            / decisions
+                            for field in ACTION_FIELDS
+                        }
+                    )
             evaluation_points.append(point)
             by_opponent[(opponent, mode)].append((point, records))
         for (opponent, mode), points in by_opponent.items():
             point, records = max(points, key=lambda pair: pair[0]["env_steps"])
+            start = (
+                next((p for p, _ in points if p["env_steps"] == 0), None)
+                if split == "validation"
+                else None
+            )
+            point["start_win_rate"] = start["win_rate"] if start else ""
+            point["win_rate_change"] = point["win_rate"] - start["win_rate"] if start else ""
+            point["start_mean_vp"] = start["mean_vp"] if start else ""
+            point["mean_vp_change"] = point["mean_vp"] - start["mean_vp"] if start else ""
             final_rows.append(point)
             grouped[(run["group"], opponent, mode)].append((point, records))
     summaries = []
@@ -246,6 +270,16 @@ def analyze_runs(
                 "cluster_ci_high": high,
                 "ci_degenerate": int(low == high),
                 "mean_vp": float(np.mean([p[0]["mean_vp"] for p in pairs])),
+                "mean_win_rate_change": (
+                    float(np.mean([p[0]["win_rate_change"] for p in pairs]))
+                    if all(p[0]["win_rate_change"] != "" for p in pairs)
+                    else ""
+                ),
+                "mean_vp_change": (
+                    float(np.mean([p[0]["mean_vp_change"] for p in pairs]))
+                    if all(p[0]["mean_vp_change"] != "" for p in pairs)
+                    else ""
+                ),
                 "mean_truncation_rate": float(np.mean([p[0]["truncation_rate"] for p in pairs])),
                 "min_env_steps": min(p[0]["env_steps"] for p in pairs),
                 "max_env_steps": max(p[0]["env_steps"] for p in pairs),
@@ -276,7 +310,91 @@ def analyze_runs(
         ],
     }
     write_json(output / "report.json", report)
+    _write_report(output / "report.md", summaries, report, split, runs)
     return report
+
+
+def _write_report(
+    path: Path, summaries: list[dict], report: dict, split: str, runs: list[dict]
+) -> None:
+    """Index the measured results without treating a smoke run as a strength claim."""
+    lines = [
+        f"# {split.title()} results",
+        "",
+        f"{report['runs']} training run{'s' if report['runs'] != 1 else ''}. "
+        "Win rates use the last evaluation of each run. "
+        "Each board is played in all four seats.",
+        "",
+        "| Configuration | Opponent | Seeds | Games | Win rate | Change from step 0 | Seed range | Mean VP |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in summaries:
+        change = f"{row['mean_win_rate_change']:+.1%}" if row["mean_win_rate_change"] != "" else "—"
+        lines.append(
+            f"| {row['label']} | {row['opponent']} ({row['mode']}) | "
+            f"{row['training_seeds']} | {row['games']} | {row['mean_win_rate']:.1%} | "
+            f"{change} | "
+            f"{row['seed_min']:.1%}–{row['seed_max']:.1%} | {row['mean_vp']:.2f} |"
+        )
+    lines += [
+        "",
+        "## Run design",
+        "",
+        "| Name | Policy | Reward | Starting weights | Training opponents |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    designs = set()
+    for run in runs:
+        cfg = run["config"]
+        model = cfg.model
+        policy = ", ".join(
+            part
+            for part in (
+                model.encoder,
+                "set attention" if model.set_attention else "",
+                f"{model.belief} belief" if model.belief != "none" else "",
+                f"{model.trade_decoder} trade decoder" if model.trade_decoder != "none" else "",
+            )
+            if part
+        )
+        reward = f"{cfg.env.shaping} VP potential" if cfg.env.shaping != "none" else "terminal"
+        start = (
+            "checkpoint"
+            if run["metadata"].get("sessions", [{}])[0].get("init_from")
+            else "random initialization"
+        )
+        opponents = ", ".join(f"{spec.kind} ({spec.weight:g})" for spec in cfg.opponents.pool)
+        designs.add((cfg.name, policy, reward, start, opponents))
+    lines.extend(f"| {' | '.join(design)} |" for design in sorted(designs))
+    lines += [
+        "",
+        "## Figures",
+        "",
+        "- `evaluation_*_env_steps.png`: win rate, victory points and truncated games "
+        "against training decisions. The wall-time versions show compute cost.",
+        "- `evaluation_strategy_*.png`: actions per 100 learner decisions in held-out "
+        "games; offers are attempts, not completed trades.",
+        "- `training_diagnostics.png`: PPO health and nonzero reward frequency. "
+        "Training episode plots are diagnostics, not held-out performance.",
+        "",
+        "![PPO diagnostics](training_diagnostics.png)",
+        "",
+        "## Reading the results",
+        "",
+        "Thin lines are individual training seeds; shaded bands show their observed range, "
+        "not a confidence interval. A small smoke run checks the pipeline only. "
+        "Use separate test board seeds after choosing settings on validation games.",
+    ]
+    if report["warnings"]:
+        lines += ["", "## Checks", ""]
+        lines.extend(f"- {warning}" for warning in report["warnings"])
+    for opponent, mode in sorted({(row["opponent"], row["mode"]) for row in summaries}):
+        figure = path.parent / f"evaluation_{opponent}_{mode}_env_steps.png"
+        lines += ["", f"### Against {opponent} ({mode})", "", f"![Evaluation]({figure.name})"]
+        strategy = path.parent / f"evaluation_strategy_{opponent}_{mode}.png"
+        if strategy.exists():
+            lines += ["", f"![Decision mix]({strategy.name})"]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _make_figures(runs: list[dict], points: list[dict], output: Path) -> None:
@@ -284,6 +402,26 @@ def _make_figures(runs: list[dict], points: list[dict], output: Path) -> None:
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.ticker import PercentFormatter
+
+    metric_labels = {
+        "policy_loss": "Policy loss",
+        "value_loss": "Value loss",
+        "entropy": "Policy entropy",
+        "main_type_entropy": "Action type entropy",
+        "approx_kl": "Approximate KL",
+        "clip_fraction": "Clipped fraction",
+        "grad_norm": "Gradient norm",
+        "explained_variance": "Explained variance",
+        "advantage_std": "Advantage spread",
+        "main_end_turn_rate_when_buildable": "End turn when buildable",
+        "return_std": "Return spread",
+        "decisions_per_second": "Decisions / second",
+        "nonzero_reward_fraction": "Decisions with nonzero reward",
+        "win_rate": "Win rate",
+        "mean_vp": "Mean victory points",
+        "truncation_rate": "Truncated games",
+    }
 
     diagnostics = (
         "policy_loss",
@@ -298,16 +436,32 @@ def _make_figures(runs: list[dict], points: list[dict], output: Path) -> None:
         "main_end_turn_rate_when_buildable",
         "return_std",
         "decisions_per_second",
+        "nonzero_reward_fraction",
     )
-    fig, axes = plt.subplots(4, 3, figsize=(16, 15))
-    for ax, field in zip(axes.flat, diagnostics, strict=True):
+    available = [
+        field
+        for field in diagnostics
+        if field == "nonzero_reward_fraction"
+        or any(row.get(field, "") != "" for run in runs for row in run["updates"])
+    ]
+    rows_count = (len(available) + 2) // 3
+    fig, axes = plt.subplots(rows_count, 3, figsize=(16, rows_count * 3.5), squeeze=False)
+    for ax, field in zip(axes.flat, available, strict=False):
         curves = defaultdict(list)
         for run in runs:
-            rows = [r for r in run["updates"] if r.get(field, "") != ""]
-            curves[run["label"]].append(
-                ([float(r["env_steps"]) for r in rows], [float(r[field]) for r in rows])
-            )
-        draw_curves(ax, curves, xlabel="Learner decisions", ylabel=field)
+            if field == "nonzero_reward_fraction":
+                rows = [r for r in run["updates"] if int(r["samples"]) > 0]
+                values = [float(r["nonzero_rewards"]) / float(r["samples"]) for r in rows]
+            else:
+                rows = [r for r in run["updates"] if r.get(field, "") != ""]
+                values = [float(r[field]) for r in rows]
+            curves[run["label"]].append(([float(r["env_steps"]) for r in rows], values))
+        draw_curves(ax, curves, xlabel="Learner decisions", ylabel=metric_labels[field])
+        if field in ("nonzero_reward_fraction", "main_end_turn_rate_when_buildable"):
+            ax.yaxis.set_major_formatter(PercentFormatter(1))
+            ax.set_ylim(-0.02, 1.02)
+    for ax in list(axes.flat)[len(available) :]:
+        ax.set_visible(False)
     handles, labels = axes.flat[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="lower center", fontsize=7)
     fig.tight_layout(rect=(0, 0.07, 1, 1))
@@ -380,14 +534,67 @@ def _make_figures(runs: list[dict], points: list[dict], output: Path) -> None:
                 for (label, _), rows in by_run.items():
                     rows.sort(key=lambda r: r[axis])
                     curves[label].append(([r[axis] for r in rows], [r[field] for r in rows]))
-                draw_curves(ax, curves, xlabel=xlabel, ylabel=field)
+                draw_curves(ax, curves, xlabel=xlabel, ylabel=metric_labels[field])
                 if field != "mean_vp":
                     ax.set_ylim(-0.02, 1.02)
+                    ax.yaxis.set_major_formatter(PercentFormatter(1))
+                else:
+                    ax.set_ylim(bottom=0)
             fig.suptitle(f"vs {opponent}, {mode}")
             handles, labels = axes[0].get_legend_handles_labels()
             fig.legend(handles, labels, loc="lower center", fontsize=7)
             fig.tight_layout(rect=(0, 0.12, 1, 0.95))
             fig.savefig(output / f"evaluation_{opponent}_{mode}_{axis}.png", dpi=150)
+            plt.close(fig)
+
+        strategy = (
+            "action_build_road",
+            "action_build_settlement",
+            "action_build_city",
+            "action_buy_dev_card",
+            "action_propose_trade",
+            "action_multi_card_offer",
+        )
+        if any(f"{field}_per_100_decisions" in point for field in strategy for point in points):
+            local = [
+                point for point in points if point["opponent"] == opponent and point["mode"] == mode
+            ]
+            active = [
+                field
+                for field in strategy
+                if field in ("action_propose_trade", "action_multi_card_offer")
+                or any(point.get(f"{field}_per_100_decisions", 0) > 0 for point in local)
+            ]
+            columns = 2 if len(active) <= 4 else 3
+            rows_count = (len(active) + columns - 1) // columns
+            fig, axes = plt.subplots(
+                rows_count, columns, figsize=(5 * columns, rows_count * 3.5), squeeze=False
+            )
+            for ax, field in zip(axes.flat, active, strict=False):
+                key = f"{field}_per_100_decisions"
+                by_run = defaultdict(list)
+                for point in points:
+                    if point["opponent"] == opponent and point["mode"] == mode and key in point:
+                        by_run[(point["label"], point["run"])].append(point)
+                curves = defaultdict(list)
+                for (label, _), rows in by_run.items():
+                    rows.sort(key=lambda r: r["env_steps"])
+                    curves[label].append(([r["env_steps"] for r in rows], [r[key] for r in rows]))
+                name = field.removeprefix("action_").replace("_", " ")
+                draw_curves(
+                    ax, curves, xlabel="Learner decisions", ylabel=f"{name} / 100 decisions"
+                )
+                if not any(point.get(key, 0) > 0 for point in local):
+                    ax.set_ylim(0, 1)
+                else:
+                    ax.set_ylim(bottom=0)
+            for ax in list(axes.flat)[len(active) :]:
+                ax.set_visible(False)
+            fig.suptitle(f"Decision mix vs {opponent} ({mode})")
+            handles, labels = axes.flat[0].get_legend_handles_labels()
+            fig.legend(handles, labels, loc="lower center", fontsize=7)
+            fig.tight_layout(rect=(0, 0.10, 1, 0.96))
+            fig.savefig(output / f"evaluation_strategy_{opponent}_{mode}.png", dpi=150)
             plt.close(fig)
 
 
