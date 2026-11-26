@@ -5,17 +5,22 @@ from pathlib import Path
 import numpy as np
 
 from carla.eval.metrics import AgentSummary
+from carla.eval.style import run_color, save_report_figure, use_report_style
 
 
-def plot_win_rates(summary: dict[str, AgentSummary], path: str | Path) -> Path:
+def plot_win_rates(
+    summary: dict[str, AgentSummary], path: str | Path, *, color_keys: dict[str, str] | None = None
+) -> Path:
     import matplotlib.pyplot as plt
 
+    use_report_style()
     values = list(summary.values())
     fig, ax = plt.subplots()
     rates = np.asarray([s.win_rate for s in values])
     ax.bar(
         [s.name for s in values],
         rates,
+        color=[run_color((color_keys or {}).get(s.name, s.name)) for s in values],
         yerr=[rates - [s.ci_low for s in values], [s.ci_high for s in values] - rates],
         capsize=4,
     )
@@ -23,7 +28,7 @@ def plot_win_rates(summary: dict[str, AgentSummary], path: str | Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(path, dpi=160)
+    save_report_figure(fig, path)
     plt.close(fig)
     return path
 
@@ -34,10 +39,8 @@ def draw_curves(ax, groups: dict, *, xlabel: str, ylabel: str) -> None:
     Linear interpolation only aligns aggregate curves; the individual measured points
     remain visible. Shading is the observed seed range, not a confidence interval.
     """
-    import matplotlib.pyplot as plt
-
-    for index, (label, curves) in enumerate(sorted(groups.items())):
-        color = plt.get_cmap("tab10")(index % 10)
+    for label, curves in sorted(groups.items()):
+        color = run_color(label)
         usable = []
         for x, y in curves:
             x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)

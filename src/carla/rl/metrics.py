@@ -82,6 +82,26 @@ ACTION_FIELDS = (
     "action_propose_trade",
     "action_multi_card_offer",
 )
+# The older action_* fields count decisions in every phase. Keep them for existing CSVs;
+# use these phase-specific fields for strategy figures and comparisons.
+MAIN_ACTION_FIELDS = (
+    "main_end_turn",
+    "main_build_road",
+    "main_build_settlement",
+    "main_build_city",
+    "main_buy_dev_card",
+    "main_play_dev_card",
+    "main_maritime_trade",
+    "main_propose_trade",
+    "main_multi_card_offer",
+)
+PHASE_ACTION_FIELDS = (
+    "main_decisions",
+    *MAIN_ACTION_FIELDS,
+    "road_building_roads",
+    "counteroffers",
+    "multi_card_counteroffers",
+)
 EVALUATION_FIELDS = (
     "update",
     "env_steps",
@@ -103,6 +123,7 @@ EVALUATION_FIELDS = (
     "turns",
     "victory_points",
     *ACTION_FIELDS,
+    *PHASE_ACTION_FIELDS,
 )
 
 

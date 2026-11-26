@@ -13,7 +13,12 @@ from carla.utils.logging import write_json
 
 
 def record_session(
-    path: Path, device: str, *, resume: Path | None = None, init_from: Path | None = None
+    path: Path,
+    device: str,
+    *,
+    resume: Path | None = None,
+    init_from: Path | None = None,
+    lineage_start_env_steps: int | None = 0,
 ) -> dict:
     """Append machine/software provenance, including when a run moves to another laptop."""
     import json
@@ -46,9 +51,69 @@ def record_session(
 
         session["gpu"] = torch.cuda.get_device_name(torch.device(device))
     metadata["sessions"].append(session)
+    if "lineage_start_env_steps" not in metadata:
+        metadata["lineage_start_env_steps"] = lineage_start_env_steps
     metadata["status"] = "running"
     write_json(metadata_path, metadata)
     return metadata
+
+
+def checkpoint_global_step(
+    path: Path, data: dict | None = None, seen: set[Path] | None = None
+) -> int | None:
+    """Decision count of a checkpoint across its training ancestors.
+
+    New checkpoints carry their starting offset. Older ones can be traced through the
+    recorded initial checkpoint while those files are still available.
+    """
+    import json
+
+    import torch
+
+    path = path.resolve()
+    seen = set() if seen is None else seen
+    if path in seen:
+        raise ValueError(f"cycle in checkpoint lineage: {path}")
+    seen.add(path)
+    if data is None:
+        if not path.exists():
+            return None
+        data = torch.load(path, map_location="cpu", weights_only=False)
+    step = int(data.get("counters", {}).get("env_steps", 0))
+    training_state = data.get("training_state") or {}
+    if training_state.get("lineage_start_env_steps") is not None:
+        return int(training_state["lineage_start_env_steps"]) + step
+    run = path.parent.parent if path.parent.name == "checkpoints" else path.parent
+    metadata_path = run / "metadata.json"
+    if not metadata_path.exists():
+        return step
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if metadata.get("lineage_start_env_steps") is not None:
+        return int(metadata["lineage_start_env_steps"]) + step
+    sessions = metadata.get("sessions", [])
+    source = sessions[0].get("init_from") if sessions else None
+    if not source:
+        return step
+    parent = checkpoint_global_step(Path(source), seen=seen)
+    return None if parent is None else parent + step
+
+
+def run_lineage_start(path: Path) -> int | None:
+    """Global decision count at the start of this run, or None if its source is missing."""
+    import json
+
+    metadata_path = path / "metadata.json"
+    if not metadata_path.exists():
+        return 0
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if "lineage_start_env_steps" in metadata:
+        value = metadata["lineage_start_env_steps"]
+        return None if value is None else int(value)
+    sessions = metadata.get("sessions", [])
+    source = sessions[0].get("init_from") if sessions else None
+    if source and Path(source).name == "bc.pt" and not Path(source).exists():
+        return 0
+    return checkpoint_global_step(Path(source)) if source else 0
 
 
 def create_run_dir(config: ExperimentConfig) -> Path:

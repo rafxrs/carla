@@ -11,6 +11,9 @@ engine:
 model:
   trade_decoder: gru
   max_trade_cards_per_side: 4
+eval:
+  boards: 25
+  retain_checkpoints: true
 opponents:
   pool:
     - kind: random

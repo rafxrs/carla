@@ -24,11 +24,17 @@ class CsvJournal:
         self.path = path
         self.fields = list(fields)
         rows = []
+        appended_fields = False
         if path.exists():
             with path.open(newline="", encoding="utf-8") as stream:
                 reader = csv.DictReader(stream)
-                if reader.fieldnames != self.fields:
+                previous_fields = reader.fieldnames
+                if (
+                    previous_fields is None
+                    or previous_fields != self.fields[: len(previous_fields)]
+                ):
                     raise ValueError(f"CSV schema mismatch: {path}")
+                appended_fields = previous_fields != self.fields
                 rows = list(reader)
         if len(rows) < committed_rows:
             raise ValueError(f"missing committed CSV rows: {path}")
@@ -37,7 +43,10 @@ class CsvJournal:
         if len(rows) > committed_rows:
             backup = path.with_suffix(".csv.recovery.bak")
             backup.write_bytes(path.read_bytes())
-        if not path.exists() or len(rows) != committed_rows:
+        if appended_fields:
+            backup = path.with_suffix(".csv.schema.bak")
+            backup.write_bytes(path.read_bytes())
+        if not path.exists() or len(rows) != committed_rows or appended_fields:
             temporary = path.with_suffix(".csv.tmp")
             with temporary.open("w", newline="", encoding="utf-8") as stream:
                 writer = csv.DictWriter(stream, self.fields)

@@ -10,8 +10,10 @@ import numpy as np
 
 from carla.config import config_hash, load_config, to_dict
 from carla.eval.plots import draw_curves
-from carla.rl.metrics import ACTION_FIELDS
+from carla.eval.style import REPORT_WIDTH, moving_average, save_report_figure, use_report_style
+from carla.rl.metrics import PHASE_ACTION_FIELDS
 from carla.utils.logging import write_json
+from carla.utils.runs import run_lineage_start
 
 
 def read_csv(path: Path) -> list[dict]:
@@ -84,6 +86,8 @@ def load_run(path: Path, include_incomplete: bool = False) -> dict:
         notices.append(
             f"No policy evaluations; optimizer diagnostics cannot rank playing strength: {path}"
         )
+    elif any(row.get("main_decisions", "") == "" for row in evaluation):
+        notices.append(f"Older evaluation rows lack phase-specific action counts: {path}")
     missing = {
         r["checkpoint"]
         for r in evaluation
@@ -101,6 +105,7 @@ def load_run(path: Path, include_incomplete: bool = False) -> dict:
         "evaluation": evaluation,
         "complete": complete,
         "metadata": metadata,
+        "lineage_start": run_lineage_start(path),
         "notices": notices,
     }
 
@@ -152,8 +157,16 @@ def _cluster_interval(groups: list[list[dict]], repetitions: int = 2000) -> tupl
 
 
 def analyze_runs(
-    inputs: list[Path], output: Path, *, include_incomplete: bool = False, split: str = "validation"
+    inputs: list[Path],
+    output: Path,
+    *,
+    include_incomplete: bool = False,
+    split: str = "validation",
+    lineage: dict[str, int] | None = None,
+    smooth_updates: int = 25,
 ) -> dict:
+    if smooth_updates <= 0:
+        raise ValueError("smooth_updates must be positive")
     paths = set()
     for root in inputs:
         if (root / "updates.csv").exists():
@@ -172,6 +185,16 @@ def analyze_runs(
                 continue
             raise
         notices.extend(run["notices"])
+        supplied = (lineage or {}).get(str(path), (lineage or {}).get(path.name))
+        if supplied is not None:
+            if int(supplied) < 0:
+                raise ValueError(f"lineage offset must be nonnegative: {path}")
+            run["lineage_start"] = int(supplied)
+        if run["lineage_start"] is None:
+            raise ValueError(
+                f"cannot locate the parent checkpoint for {path}; supply --lineage "
+                "with this run's starting decision count"
+            )
         runs.append(run)
     if not runs:
         raise ValueError("no completed runs found; inspect failures or use --include-incomplete")
@@ -210,6 +233,7 @@ def analyze_runs(
                 "rollout_steps": cfg.ppo.rollout_steps,
                 "envs": cfg.runtime.num_workers * cfg.runtime.envs_per_worker,
                 "env_steps": step,
+                "global_env_steps": run["lineage_start"] + step,
                 "training_seconds": float(records[0]["training_seconds"]),
                 "wall_seconds": float(records[0]["wall_seconds"]),
                 "split": split,
@@ -222,17 +246,23 @@ def analyze_runs(
                 "mean_vp": np.mean([float(r["victory_points"]) for r in records]),
                 "mean_turns": np.mean([float(r["turns"]) for r in records]),
             }
-            if all(all(row.get(field, "") != "" for field in ACTION_FIELDS) for row in records):
-                decisions = sum(int(row["learner_decisions"]) for row in records)
+            if all(
+                all(row.get(field, "") != "" for field in PHASE_ACTION_FIELDS) for row in records
+            ):
+                decisions = sum(int(row["main_decisions"]) for row in records)
                 if decisions:
                     point.update(
                         {
-                            f"{field}_per_100_decisions": 100
+                            f"{field}_per_100_main_decisions": 100
                             * sum(int(r[field]) for r in records)
                             / decisions
-                            for field in ACTION_FIELDS
+                            for field in PHASE_ACTION_FIELDS
+                            if field.startswith("main_") and field != "main_decisions"
                         }
                     )
+                point["main_decisions"] = decisions
+                for field in ("road_building_roads", "counteroffers", "multi_card_counteroffers"):
+                    point[f"{field}_per_game"] = sum(int(r[field]) for r in records) / len(records)
             evaluation_points.append(point)
             by_opponent[(opponent, mode)].append((point, records))
         for (opponent, mode), points in by_opponent.items():
@@ -283,6 +313,8 @@ def analyze_runs(
                 "mean_truncation_rate": float(np.mean([p[0]["truncation_rate"] for p in pairs])),
                 "min_env_steps": min(p[0]["env_steps"] for p in pairs),
                 "max_env_steps": max(p[0]["env_steps"] for p in pairs),
+                "min_global_env_steps": min(p[0]["global_env_steps"] for p in pairs),
+                "max_global_env_steps": max(p[0]["global_env_steps"] for p in pairs),
                 "mean_wall_seconds": float(np.mean([p[0]["wall_seconds"] for p in pairs])),
             }
         )
@@ -294,7 +326,7 @@ def analyze_runs(
     _write_csv(output / "evaluation_points.csv", evaluation_points)
     _write_csv(output / "run_summary.csv", final_rows)
     _write_csv(output / "configuration_summary.csv", summaries)
-    _make_figures(runs, evaluation_points, output)
+    _make_figures(runs, evaluation_points, output, smooth_updates)
     report = {
         "runs": len(runs),
         "warnings": notices,
@@ -307,6 +339,7 @@ def analyze_runs(
             "Longer rollouts also change collection batch size and policy refresh frequency.",
             "Critic loss/explained variance use lambda-dependent targets, not true state values.",
             "Use separate test boards after selecting configurations on validation results.",
+            f"PPO diagnostic curves use a trailing mean of {smooth_updates} updates; raw values remain in updates.csv.",
         ],
     }
     write_json(output / "report.json", report)
@@ -325,7 +358,7 @@ def _write_report(
         "Win rates use the last evaluation of each run. "
         "Each board is played in all four seats.",
         "",
-        "| Configuration | Opponent | Seeds | Games | Win rate | Change from step 0 | Seed range | Mean VP |",
+        "| Configuration | Opponent | Seeds | Games | Win rate | Change within stage | Seed range | Mean VP |",
         "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for row in summaries:
@@ -336,13 +369,7 @@ def _write_report(
             f"{change} | "
             f"{row['seed_min']:.1%}–{row['seed_max']:.1%} | {row['mean_vp']:.2f} |"
         )
-    lines += [
-        "",
-        "## Run design",
-        "",
-        "| Name | Policy | Reward | Starting weights | Training opponents |",
-        "| --- | --- | --- | --- | --- |",
-    ]
+    lines += ["", "## Run design", ""]
     designs = set()
     for run in runs:
         cfg = run["config"]
@@ -357,27 +384,47 @@ def _write_report(
             )
             if part
         )
-        reward = f"{cfg.env.shaping} VP potential" if cfg.env.shaping != "none" else "terminal"
+        reward = (
+            f"{cfg.env.shaping} VP potential (coef {cfg.env.shaping_coef:g}, "
+            f"gamma {cfg.env.shaping_gamma:g})"
+            if cfg.env.shaping != "none"
+            else "terminal reward"
+        )
+        if cfg.env.vp_reward:
+            reward += f", {cfg.env.vp_reward:g} per public VP"
+        source = run["metadata"].get("sessions", [{}])[0].get("init_from")
         start = (
-            "checkpoint"
-            if run["metadata"].get("sessions", [{}])[0].get("init_from")
+            f"checkpoint at {run['lineage_start']:,} cumulative decisions"
+            if source
             else "random initialization"
         )
         opponents = ", ".join(f"{spec.kind} ({spec.weight:g})" for spec in cfg.opponents.pool)
-        designs.add((cfg.name, policy, reward, start, opponents))
-    lines.extend(f"| {' | '.join(design)} |" for design in sorted(designs))
+        if any(spec.kind == "snapshot" for spec in cfg.opponents.pool):
+            opponents += f"; snapshots every {cfg.opponents.snapshot_every} updates, max {cfg.opponents.max_snapshots}"
+        kl = (
+            f"KL early-stop target {cfg.ppo.target_kl:g}; no KL penalty"
+            if cfg.ppo.target_kl is not None
+            else "no KL stop target or penalty"
+        )
+        designs.add((cfg.name, policy, reward, start, opponents, kl))
+    lines.extend(
+        f"- **{name}:** {policy}; {reward}; {start}; opponents: {opponents}; {kl}."
+        for name, policy, reward, start, opponents, kl in sorted(designs)
+    )
     lines += [
         "",
         "## Figures",
         "",
-        "- `evaluation_*_env_steps.png`: win rate, victory points and truncated games "
-        "against training decisions. The wall-time versions show compute cost.",
-        "- `evaluation_strategy_*.png`: actions per 100 learner decisions in held-out "
-        "games; offers are attempts, not completed trades.",
-        "- `training_diagnostics.png`: PPO health and nonzero reward frequency. "
-        "Training episode plots are diagnostics, not held-out performance.",
+        "- Evaluation figures show win rate, VP and truncation against cumulative learner "
+        "decisions. Wall-time versions show each run's own elapsed time.",
+        "- Strategy figures count only MAIN-phase decisions. Trade figures separate new offers, "
+        "counteroffers and free Road Building roads; offers are attempts, not completed trades.",
+        "- PPO diagnostics use a trailing update mean. Raw per-update values, including throughput "
+        "and reward density, remain in `updates.csv`. Training episodes are diagnostics, not held-out results.",
+        "- Every figure is saved as PNG and PDF at the report width.",
         "",
         "![PPO diagnostics](training_diagnostics.png)",
+        "[PDF](training_diagnostics.pdf)",
         "",
         "## Reading the results",
         "",
@@ -390,82 +437,64 @@ def _write_report(
         lines.extend(f"- {warning}" for warning in report["warnings"])
     for opponent, mode in sorted({(row["opponent"], row["mode"]) for row in summaries}):
         figure = path.parent / f"evaluation_{opponent}_{mode}_env_steps.png"
-        lines += ["", f"### Against {opponent} ({mode})", "", f"![Evaluation]({figure.name})"]
-        strategy = path.parent / f"evaluation_strategy_{opponent}_{mode}.png"
-        if strategy.exists():
-            lines += ["", f"![Decision mix]({strategy.name})"]
+        lines += [
+            "",
+            f"### Against {opponent} ({mode})",
+            "",
+            f"![Evaluation]({figure.name}) [PDF]({figure.with_suffix('.pdf').name})",
+        ]
+        for kind in ("strategy", "trade"):
+            figure = path.parent / f"evaluation_{kind}_{opponent}_{mode}.png"
+            if figure.exists():
+                lines += [
+                    "",
+                    f"![{kind.title()} choices]({figure.name}) "
+                    f"[PDF]({figure.with_suffix('.pdf').name})",
+                ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _make_figures(runs: list[dict], points: list[dict], output: Path) -> None:
+def _make_figures(runs: list[dict], points: list[dict], output: Path, smooth_updates: int) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.ticker import PercentFormatter
 
+    use_report_style()
     metric_labels = {
-        "policy_loss": "Policy loss",
         "value_loss": "Value loss",
         "entropy": "Policy entropy",
-        "main_type_entropy": "Action type entropy",
         "approx_kl": "Approximate KL",
         "clip_fraction": "Clipped fraction",
-        "grad_norm": "Gradient norm",
-        "explained_variance": "Explained variance",
-        "advantage_std": "Advantage spread",
-        "main_end_turn_rate_when_buildable": "End turn when buildable",
-        "return_std": "Return spread",
-        "decisions_per_second": "Decisions / second",
-        "nonzero_reward_fraction": "Decisions with nonzero reward",
         "win_rate": "Win rate",
         "mean_vp": "Mean victory points",
         "truncation_rate": "Truncated games",
     }
 
-    diagnostics = (
-        "policy_loss",
-        "value_loss",
-        "entropy",
-        "main_type_entropy",
-        "approx_kl",
-        "clip_fraction",
-        "grad_norm",
-        "explained_variance",
-        "advantage_std",
-        "main_end_turn_rate_when_buildable",
-        "return_std",
-        "decisions_per_second",
-        "nonzero_reward_fraction",
-    )
-    available = [
-        field
-        for field in diagnostics
-        if field == "nonzero_reward_fraction"
-        or any(row.get(field, "") != "" for run in runs for row in run["updates"])
-    ]
-    rows_count = (len(available) + 2) // 3
-    fig, axes = plt.subplots(rows_count, 3, figsize=(16, rows_count * 3.5), squeeze=False)
-    for ax, field in zip(axes.flat, available, strict=False):
+    diagnostics = ("value_loss", "approx_kl", "entropy", "clip_fraction")
+    fig, axes = plt.subplots(2, 2, figsize=(REPORT_WIDTH, 5.2))
+    for ax, field in zip(axes.flat, diagnostics, strict=True):
         curves = defaultdict(list)
         for run in runs:
-            if field == "nonzero_reward_fraction":
-                rows = [r for r in run["updates"] if int(r["samples"]) > 0]
-                values = [float(r["nonzero_rewards"]) / float(r["samples"]) for r in rows]
-            else:
-                rows = [r for r in run["updates"] if r.get(field, "") != ""]
-                values = [float(r[field]) for r in rows]
-            curves[run["label"]].append(([float(r["env_steps"]) for r in rows], values))
-        draw_curves(ax, curves, xlabel="Learner decisions", ylabel=metric_labels[field])
-        if field in ("nonzero_reward_fraction", "main_end_turn_rate_when_buildable"):
+            rows = [r for r in run["updates"] if r.get(field, "") != ""]
+            values = moving_average([float(r[field]) for r in rows], smooth_updates)
+            curves[run["label"]].append(
+                ([run["lineage_start"] + float(r["env_steps"]) for r in rows], values)
+            )
+        draw_curves(ax, curves, xlabel="Cumulative learner decisions", ylabel=metric_labels[field])
+        if field == "clip_fraction":
             ax.yaxis.set_major_formatter(PercentFormatter(1))
-            ax.set_ylim(-0.02, 1.02)
-    for ax in list(axes.flat)[len(available) :]:
-        ax.set_visible(False)
+            ax.set_ylim(bottom=0)
+        if field == "approx_kl":
+            limits = {run["config"].ppo.target_kl for run in runs}
+            if len(limits) == 1 and None not in limits:
+                ax.axhline(limits.pop(), color="#666666", linestyle="--", linewidth=1)
     handles, labels = axes.flat[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="lower center", fontsize=7)
-    fig.tight_layout(rect=(0, 0.07, 1, 1))
-    fig.savefig(output / "training_diagnostics.png", dpi=150)
+    fig.legend(handles, labels, loc="lower center", ncol=2)
+    fig.suptitle(f"PPO diagnostics (trailing {smooth_updates}-update mean)")
+    fig.tight_layout(rect=(0, 0.10, 1, 0.95))
+    save_report_figure(fig, output / "training_diagnostics.png")
     plt.close(fig)
 
     head_fields = sorted(
@@ -478,24 +507,30 @@ def _make_figures(runs: list[dict], points: list[dict], output: Path) -> None:
         }
     )
     if head_fields:
-        fig, axes = plt.subplots((len(head_fields) + 2) // 3, 3, figsize=(16, 11), squeeze=False)
+        rows_count = (len(head_fields) + 1) // 2
+        fig, axes = plt.subplots(
+            rows_count, 2, figsize=(REPORT_WIDTH, rows_count * 2.3), squeeze=False
+        )
         for ax, field in zip(axes.flat, head_fields, strict=False):
             curves = defaultdict(list)
             for run in runs:
                 rows = [r for r in run["updates"] if r.get(field, "") != ""]
                 curves[run["label"]].append(
-                    ([float(r["env_steps"]) for r in rows], [float(r[field]) for r in rows])
+                    (
+                        [run["lineage_start"] + float(r["env_steps"]) for r in rows],
+                        moving_average([float(r[field]) for r in rows], smooth_updates),
+                    )
                 )
-            draw_curves(ax, curves, xlabel="Learner decisions", ylabel=field)
+            draw_curves(ax, curves, xlabel="Cumulative learner decisions", ylabel=field)
         for ax in list(axes.flat)[len(head_fields) :]:
             ax.set_visible(False)
         handles, labels = axes.flat[0].get_legend_handles_labels()
-        fig.legend(handles, labels, loc="lower center", fontsize=7)
+        fig.legend(handles, labels, loc="lower center", ncol=2)
         fig.tight_layout(rect=(0, 0.08, 1, 1))
-        fig.savefig(output / "head_entropies.png", dpi=150)
+        save_report_figure(fig, output / "head_entropies.png")
         plt.close(fig)
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    fig, axes = plt.subplots(2, 2, figsize=(REPORT_WIDTH, 5.2))
     for ax, field in zip(
         axes.flat, ("return", "victory_points", "turns", "truncated"), strict=True
     ):
@@ -513,19 +548,30 @@ def _make_figures(runs: list[dict], points: list[dict], output: Path) -> None:
             window = min(25, len(values))
             means = np.convolve(values, np.ones(window) / window, mode="valid")
             curves[run["label"]].append(
-                ([float(r["env_steps"]) for r in rows][window - 1 :], means)
+                (
+                    [run["lineage_start"] + float(r["env_steps"]) for r in rows][window - 1 :],
+                    means,
+                )
             )
-        draw_curves(ax, curves, xlabel="Learner decisions", ylabel=f"{field} (up to 25 episodes)")
+        draw_curves(
+            ax, curves, xlabel="Cumulative learner decisions", ylabel=f"{field} (up to 25 episodes)"
+        )
     handles, labels = axes.flat[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="lower center", fontsize=7)
+    fig.legend(handles, labels, loc="lower center", ncol=2)
     fig.tight_layout(rect=(0, 0.08, 1, 1))
-    fig.savefig(output / "training_episodes.png", dpi=150)
+    save_report_figure(fig, output / "training_episodes.png")
     plt.close(fig)
 
     for opponent, mode in sorted({(p["opponent"], p["mode"]) for p in points}):
-        for axis, xlabel in (("env_steps", "Learner decisions"), ("wall_seconds", "Wall seconds")):
-            fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-            for ax, field in zip(axes, ("win_rate", "mean_vp", "truncation_rate"), strict=True):
+        for axis, filename_axis, xlabel in (
+            ("global_env_steps", "env_steps", "Cumulative learner decisions"),
+            ("wall_seconds", "wall_seconds", "Run wall seconds"),
+        ):
+            fig, axes = plt.subplot_mosaic(
+                [["win_rate", "mean_vp"], ["truncation_rate", "truncation_rate"]],
+                figsize=(REPORT_WIDTH, 5.2),
+            )
+            for field, ax in axes.items():
                 by_run = defaultdict(list)
                 for point in points:
                     if point["opponent"] == opponent and point["mode"] == mode:
@@ -540,62 +586,84 @@ def _make_figures(runs: list[dict], points: list[dict], output: Path) -> None:
                     ax.yaxis.set_major_formatter(PercentFormatter(1))
                 else:
                     ax.set_ylim(bottom=0)
-            fig.suptitle(f"vs {opponent}, {mode}")
-            handles, labels = axes[0].get_legend_handles_labels()
-            fig.legend(handles, labels, loc="lower center", fontsize=7)
-            fig.tight_layout(rect=(0, 0.12, 1, 0.95))
-            fig.savefig(output / f"evaluation_{opponent}_{mode}_{axis}.png", dpi=150)
+            fig.suptitle(f"Evaluation vs {opponent} ({mode})")
+            handles, labels = axes["win_rate"].get_legend_handles_labels()
+            fig.legend(handles, labels, loc="lower center", ncol=2)
+            fig.tight_layout(rect=(0, 0.10, 1, 0.95))
+            save_report_figure(fig, output / f"evaluation_{opponent}_{mode}_{filename_axis}.png")
             plt.close(fig)
 
-        strategy = (
-            "action_build_road",
-            "action_build_settlement",
-            "action_build_city",
-            "action_buy_dev_card",
-            "action_propose_trade",
-            "action_multi_card_offer",
-        )
-        if any(f"{field}_per_100_decisions" in point for field in strategy for point in points):
-            local = [
-                point for point in points if point["opponent"] == opponent and point["mode"] == mode
-            ]
-            active = [
-                field
-                for field in strategy
-                if field in ("action_propose_trade", "action_multi_card_offer")
-                or any(point.get(f"{field}_per_100_decisions", 0) > 0 for point in local)
-            ]
-            columns = 2 if len(active) <= 4 else 3
-            rows_count = (len(active) + columns - 1) // columns
-            fig, axes = plt.subplots(
-                rows_count, columns, figsize=(5 * columns, rows_count * 3.5), squeeze=False
-            )
-            for ax, field in zip(axes.flat, active, strict=False):
-                key = f"{field}_per_100_decisions"
-                by_run = defaultdict(list)
-                for point in points:
-                    if point["opponent"] == opponent and point["mode"] == mode and key in point:
-                        by_run[(point["label"], point["run"])].append(point)
-                curves = defaultdict(list)
-                for (label, _), rows in by_run.items():
-                    rows.sort(key=lambda r: r["env_steps"])
-                    curves[label].append(([r["env_steps"] for r in rows], [r[key] for r in rows]))
-                name = field.removeprefix("action_").replace("_", " ")
-                draw_curves(
-                    ax, curves, xlabel="Learner decisions", ylabel=f"{name} / 100 decisions"
-                )
-                if not any(point.get(key, 0) > 0 for point in local):
-                    ax.set_ylim(0, 1)
-                else:
-                    ax.set_ylim(bottom=0)
-            for ax in list(axes.flat)[len(active) :]:
-                ax.set_visible(False)
-            fig.suptitle(f"Decision mix vs {opponent} ({mode})")
-            handles, labels = axes.flat[0].get_legend_handles_labels()
-            fig.legend(handles, labels, loc="lower center", fontsize=7)
-            fig.tight_layout(rect=(0, 0.10, 1, 0.96))
-            fig.savefig(output / f"evaluation_strategy_{opponent}_{mode}.png", dpi=150)
-            plt.close(fig)
+        local = [
+            point for point in points if point["opponent"] == opponent and point["mode"] == mode
+        ]
+        if any("main_build_road_per_100_main_decisions" in point for point in local):
+            panels = {
+                "strategy": (
+                    (
+                        "main_build_road_per_100_main_decisions",
+                        "Road builds",
+                        "per 100 main decisions",
+                    ),
+                    (
+                        "main_build_settlement_per_100_main_decisions",
+                        "Settlement builds",
+                        "per 100 main decisions",
+                    ),
+                    (
+                        "main_build_city_per_100_main_decisions",
+                        "City upgrades",
+                        "per 100 main decisions",
+                    ),
+                    (
+                        "main_buy_dev_card_per_100_main_decisions",
+                        "Development cards",
+                        "per 100 main decisions",
+                    ),
+                ),
+                "trade": (
+                    (
+                        "main_propose_trade_per_100_main_decisions",
+                        "New offers",
+                        "per 100 main decisions",
+                    ),
+                    ("counteroffers_per_game", "Counteroffers", "per game"),
+                    (
+                        "main_multi_card_offer_per_100_main_decisions",
+                        "Multi-card offers",
+                        "per 100 main decisions",
+                    ),
+                    ("road_building_roads_per_game", "Free Road Building roads", "per game"),
+                ),
+            }
+            for kind, fields in panels.items():
+                fig, axes = plt.subplots(2, 2, figsize=(REPORT_WIDTH, 5.2))
+                for index, (ax, (key, title, unit)) in enumerate(
+                    zip(axes.flat, fields, strict=True)
+                ):
+                    by_run = defaultdict(list)
+                    for point in local:
+                        if key in point:
+                            by_run[(point["label"], point["run"])].append(point)
+                    curves = defaultdict(list)
+                    for (label, _), rows in by_run.items():
+                        rows.sort(key=lambda r: r["global_env_steps"])
+                        curves[label].append(
+                            ([r["global_env_steps"] for r in rows], [r[key] for r in rows])
+                        )
+                    draw_curves(
+                        ax,
+                        curves,
+                        xlabel="Cumulative learner decisions",
+                        ylabel=unit if index % 2 == 0 else "",
+                    )
+                    ax.set_title(f"{title} / game" if index % 2 and kind == "trade" else title)
+                    ax.set_ylim(0, max(1, ax.get_ylim()[1]))
+                fig.suptitle(f"{kind.title()} choices vs {opponent} ({mode})")
+                handles, labels = axes.flat[0].get_legend_handles_labels()
+                fig.legend(handles, labels, loc="lower center", ncol=2)
+                fig.tight_layout(rect=(0, 0.10, 1, 0.96))
+                save_report_figure(fig, output / f"evaluation_{kind}_{opponent}_{mode}.png")
+                plt.close(fig)
 
 
 def main(argv=None) -> None:
@@ -604,9 +672,21 @@ def main(argv=None) -> None:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--include-incomplete", action="store_true")
     parser.add_argument("--split", choices=("validation", "test"), default="validation")
+    parser.add_argument(
+        "--lineage",
+        type=Path,
+        help="JSON mapping old run folder names to global starting decisions",
+    )
     args = parser.parse_args(argv)
+    lineage = json.loads(args.lineage.read_text(encoding="utf-8")) if args.lineage else None
+    if lineage is not None and not isinstance(lineage, dict):
+        parser.error("--lineage must contain a JSON object")
     report = analyze_runs(
-        args.inputs, args.output, include_incomplete=args.include_incomplete, split=args.split
+        args.inputs,
+        args.output,
+        include_incomplete=args.include_incomplete,
+        split=args.split,
+        lineage=lineage,
     )
     print(f"Analyzed {report['runs']} runs; figures and summaries: {args.output}")
     for notice in report["warnings"]:

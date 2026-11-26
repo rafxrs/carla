@@ -27,7 +27,12 @@ from carla.rl.ppo import PPOLearner
 from carla.rl.process_rollouts import SynchronousRolloutPool
 from carla.rl.rollout import collect_rollouts
 from carla.utils.logging import CsvJournal, write_json
-from carla.utils.runs import create_run_dir, record_session
+from carla.utils.runs import (
+    checkpoint_global_step,
+    create_run_dir,
+    record_session,
+    run_lineage_start,
+)
 from carla.utils.seeding import derive_seed, seed_everything
 
 log = logging.getLogger(__name__)
@@ -87,7 +92,7 @@ def _validate(config: ExperimentConfig) -> None:
         raise ValueError("evaluation opponents must be distinct random/heuristic bots")
 
 
-def _load_initial_weights(path: Path, policy, config: ExperimentConfig) -> None:
+def _load_initial_weights(path: Path, policy, config: ExperimentConfig) -> int | None:
     """Copy policy weights from another run's checkpoint into a fresh run.
 
     Only the network is reused: the optimizer, counters, environments and journals start anew,
@@ -102,6 +107,7 @@ def _load_initial_weights(path: Path, policy, config: ExperimentConfig) -> None:
         changed = sorted(k for k in saved if saved[k] != to_dict(config)["model"].get(k))
         raise ValueError(f"init checkpoint model config differs: {', '.join(changed)}")
     policy.load_state_dict(data["policy"])
+    return checkpoint_global_step(path, data)
 
 
 def train(
@@ -183,9 +189,14 @@ def train(
         learner.version = int(meta["counters"]["updates"])
         if config.ppo.total_env_steps < env_steps:
             raise ValueError("total_env_steps cannot be smaller than the restored decision count")
+    lineage_start = (
+        state.get("lineage_start_env_steps", run_lineage_start(run_dir))
+        if resume is not None
+        else 0
+    )
     if init_from is not None:
         init_from = Path(init_from).resolve()
-        _load_initial_weights(init_from, policy, config)
+        lineage_start = _load_initial_weights(init_from, policy, config)
     if resume is None and config.runtime.num_workers == 1:
         observations = [
             env.reset(
@@ -209,7 +220,13 @@ def train(
         )
     }
     save_config(config, run_dir / "config.yaml")
-    metadata = record_session(run_dir, str(device), resume=resume, init_from=init_from)
+    metadata = record_session(
+        run_dir,
+        str(device),
+        resume=resume,
+        init_from=init_from,
+        lineage_start_env_steps=lineage_start,
+    )
     training_seconds = state.get("training_seconds", 0.0)
     evaluation_seconds = state.get("evaluation_seconds", 0.0)
     previous_wall = state.get("wall_seconds", 0.0)
@@ -245,6 +262,7 @@ def train(
                 "wall_seconds": wall_seconds(),
                 "optimizer_steps_total": optimizer_steps_total,
                 "last_evaluation": last_evaluation,
+                "lineage_start_env_steps": lineage_start,
             },
             env_steps=env_steps,
             updates=learner.version,
