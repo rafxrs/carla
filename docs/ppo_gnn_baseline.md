@@ -80,10 +80,13 @@ PPO update, rollout collector, action masks, and checkpoint format. With the opt
 decoder, rollouts also store the padded offer tokens described in [trade_decoder.md](trade_decoder.md).
 
 The trainer supports one or more synchronous CPU workers, each with one or more
-environments; the GNN smoke config uses one environment. Each game has three fixed
-bots of a single configured kind (`random` or `heuristic`). The optional GRU trade
-decoder also attaches to GNN context; belief networks, set attention, and self-play
-pools remain unsupported. Domestic trading remains disabled in the baseline GNN configs.
+environments; the GNN smoke config uses one environment. A pool of bots gives every
+environment fixed opponents for the whole run (weights mix `random` and `heuristic` across
+tables); adding `self`, `snapshot` or `checkpoint` specs makes it a league that samples
+opponents per game (see [experiments.md](experiments.md#league-opponents)). The optional GRU
+trade decoder also attaches to GNN context, as do set attention (`model.set_attention`) and
+the GRU belief (`model.belief: gru`) of the full model. Domestic trading remains disabled in
+the baseline GNN configs.
 
 `configs/experiments/gnn.yaml` inherits the general base configuration; its inherited worker
 and opponent-pool settings still require overrides for synchronous training. Use

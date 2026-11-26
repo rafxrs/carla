@@ -168,8 +168,9 @@ The README has simulation and tournament commands for non-GUI runs.
    is not an optimized negotiator.
 3. **Belief work.** Infer opponents' holdings from public events. Keep
    inferred state separate from ground-truth auxiliary targets, and do not feed
-   hidden hands into policy inputs. The opponent pool, belief module, and set
-   attention remain separate project work.
+   hidden hands into policy inputs. The GRU belief module (`model.belief: gru`)
+   reads the public event stream and is trained against the hidden hands only
+   through an auxiliary loss.
 4. **New rules or limits.** Change typed `EngineConfig`, the initiation checks,
    and the offer validator together, then expose the setting in an experiment
    YAML. Preserve the one-response-per-seat bound and the hand checks if the
