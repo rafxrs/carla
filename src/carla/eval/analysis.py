@@ -390,6 +390,8 @@ def _write_report(
             if cfg.env.shaping != "none"
             else "terminal reward"
         )
+        if cfg.env.shaping == "production":
+            reward += f", production weight {cfg.env.production_weight:g}"
         if cfg.env.vp_reward:
             reward += f", {cfg.env.vp_reward:g} per public VP"
         source = run["metadata"].get("sessions", [{}])[0].get("init_from")
@@ -398,14 +400,26 @@ def _write_report(
             if source
             else "random initialization"
         )
-        opponents = ", ".join(f"{spec.kind} ({spec.weight:g})" for spec in cfg.opponents.pool)
+        opponent_parts = []
+        for spec in cfg.opponents.pool:
+            name = spec.kind
+            if spec.kind == "checkpoint" and spec.path:
+                name = spec.name or Path(spec.path).stem
+            opponent_parts.append(f"{name} ({spec.weight:g})")
+        opponents = ", ".join(opponent_parts)
         if any(spec.kind == "snapshot" for spec in cfg.opponents.pool):
             opponents += f"; snapshots every {cfg.opponents.snapshot_every} updates, max {cfg.opponents.max_snapshots}"
         kl = (
-            f"KL early-stop target {cfg.ppo.target_kl:g}; no KL penalty"
+            f"KL early-stop target {cfg.ppo.target_kl:g}"
             if cfg.ppo.target_kl is not None
-            else "no KL stop target or penalty"
+            else "no KL early-stop target"
         )
+        if cfg.ppo.reference_kl_coef:
+            kl += f"; reference action-type KL penalty {cfg.ppo.reference_kl_coef:g}"
+            if cfg.ppo.reference_checkpoint:
+                kl += f" toward {Path(cfg.ppo.reference_checkpoint).stem}"
+        else:
+            kl += "; no reference KL penalty"
         designs.add((cfg.name, policy, reward, start, opponents, kl))
     lines.extend(
         f"- **{name}:** {policy}; {reward}; {start}; opponents: {opponents}; {kl}."
@@ -435,6 +449,13 @@ def _write_report(
     if report["warnings"]:
         lines += ["", "## Checks", ""]
         lines.extend(f"- {warning}" for warning in report["warnings"])
+    if any(any(row.get("reference_kl", "") != "" for row in run["updates"]) for run in runs):
+        lines += [
+            "",
+            "### Reference policy KL",
+            "",
+            "![Reference KL](reference_kl.png) [PDF](reference_kl.pdf)",
+        ]
     for opponent, mode in sorted({(row["opponent"], row["mode"]) for row in summaries}):
         figure = path.parent / f"evaluation_{opponent}_{mode}_env_steps.png"
         lines += [
@@ -496,6 +517,34 @@ def _make_figures(runs: list[dict], points: list[dict], output: Path, smooth_upd
     fig.tight_layout(rect=(0, 0.10, 1, 0.95))
     save_report_figure(fig, output / "training_diagnostics.png")
     plt.close(fig)
+
+    if any(any(row.get("reference_kl", "") != "" for row in run["updates"]) for run in runs):
+        fig, axes = plt.subplots(1, 2, figsize=(REPORT_WIDTH, 3.1))
+        for ax, weighted in zip(axes, (False, True), strict=True):
+            curves = defaultdict(list)
+            for run in runs:
+                rows = [row for row in run["updates"] if row.get("reference_kl", "") != ""]
+                if not rows:
+                    continue
+                scale = run["config"].ppo.reference_kl_coef if weighted else 1.0
+                values = moving_average(
+                    [float(row["reference_kl"]) * scale for row in rows], smooth_updates
+                )
+                curves[run["label"]].append(
+                    ([run["lineage_start"] + float(row["env_steps"]) for row in rows], values)
+                )
+            draw_curves(
+                ax,
+                curves,
+                xlabel="Cumulative learner decisions",
+                ylabel="Weighted loss term" if weighted else "Reference action-type KL",
+            )
+            ax.set_ylim(bottom=0)
+        handles, labels = axes[0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc="lower center", ncol=2)
+        fig.tight_layout(rect=(0, 0.12, 1, 1))
+        save_report_figure(fig, output / "reference_kl.png")
+        plt.close(fig)
 
     head_fields = sorted(
         {

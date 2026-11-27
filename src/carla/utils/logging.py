@@ -17,24 +17,25 @@ class CsvJournal:
     """Flush each record; on resume remove rows not committed by the checkpoint.
 
     A backup preserves any discarded tail. Refuse missing committed records instead of
-    silently reporting an incomplete experiment. One training process owns each journal.
+    silently reporting an incomplete experiment. One training process owns each journal. A
+    journal written before fields were added is rewritten with the new header, leaving the new
+    fields empty in its old rows; any other schema difference is refused.
     """
 
     def __init__(self, path: Path, fields: Sequence[str], committed_rows: int = 0) -> None:
         self.path = path
         self.fields = list(fields)
         rows = []
-        appended_fields = False
+        upgrade = False
         if path.exists():
             with path.open(newline="", encoding="utf-8") as stream:
                 reader = csv.DictReader(stream)
                 previous_fields = reader.fieldnames
-                if (
-                    previous_fields is None
-                    or previous_fields != self.fields[: len(previous_fields)]
-                ):
+                if not previous_fields or previous_fields != [
+                    field for field in self.fields if field in previous_fields
+                ]:
                     raise ValueError(f"CSV schema mismatch: {path}")
-                appended_fields = previous_fields != self.fields
+                upgrade = previous_fields != self.fields
                 rows = list(reader)
         if len(rows) < committed_rows:
             raise ValueError(f"missing committed CSV rows: {path}")
@@ -43,10 +44,10 @@ class CsvJournal:
         if len(rows) > committed_rows:
             backup = path.with_suffix(".csv.recovery.bak")
             backup.write_bytes(path.read_bytes())
-        if appended_fields:
+        if upgrade:
             backup = path.with_suffix(".csv.schema.bak")
             backup.write_bytes(path.read_bytes())
-        if not path.exists() or len(rows) != committed_rows or appended_fields:
+        if not path.exists() or len(rows) != committed_rows or upgrade:
             temporary = path.with_suffix(".csv.tmp")
             with temporary.open("w", newline="", encoding="utf-8") as stream:
                 writer = csv.DictWriter(stream, self.fields)

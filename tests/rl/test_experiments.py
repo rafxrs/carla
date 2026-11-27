@@ -10,7 +10,7 @@ import torch
 
 from carla.cli import main
 from carla.config import load_config, save_config
-from carla.eval.analysis import analyze_runs, load_run, read_csv
+from carla.eval.analysis import _make_figures, _write_report, analyze_runs, load_run, read_csv
 from carla.models.factory import build_policy
 from carla.rl.checkpoint import rng_state, save_checkpoint
 from carla.rl.evaluate import evaluate_policy, export_evaluation
@@ -50,6 +50,11 @@ def test_long_experiment_configs_enable_validation():
         "full_trade_margin",
         "full_trade_own_mixed",
         "full_trade_own_heuristic",
+        "full_trade_production_heuristic",
+        "full_trade_production_push",
+        "full_trade_production_bc_kl",
+        "full_trade_production_bc_kl_strong",
+        "full_trade_league",
     ):
         cfg = load_config(Path("configs/experiments") / f"{name}.yaml")
         assert cfg.eval.every_env_steps == 1_000_000
@@ -61,6 +66,53 @@ def test_long_experiment_configs_enable_validation():
     baseline = load_config("configs/experiments/ppo_mlp_baseline.yaml")
     assert baseline.eval.every_env_steps == 20_000
     assert baseline.runtime.checkpoint_every == 20
+
+
+def test_report_names_production_shaping_and_reference_kl(tmp_path):
+    config = load_config("configs/experiments/full_trade_production_bc_kl.yaml")
+    report_path = tmp_path / "report.md"
+    _write_report(
+        report_path,
+        [],
+        {"runs": 1, "warnings": []},
+        "validation",
+        [
+            {
+                "config": config,
+                "lineage_start": 3_000_000,
+                "metadata": {"sessions": [{"init_from": "parent.pt"}]},
+                "updates": [{"reference_kl": "0.2"}],
+            }
+        ],
+    )
+    report = report_path.read_text(encoding="utf-8")
+    assert "production weight 1" in report
+    assert "reference action-type KL penalty 0.05" in report
+    assert "checkpoint at 3,000,000 cumulative decisions" in report
+    assert "reference_kl.pdf" in report
+
+
+def test_reference_kl_report_figure_uses_recorded_coefficient(tmp_path):
+    config = load_config("configs/experiments/full_trade_production_bc_kl.yaml")
+    run = {
+        "config": config,
+        "lineage_start": 3_000_000,
+        "label": "KL",
+        "episodes": [],
+        "updates": [
+            {
+                "env_steps": "8",
+                "value_loss": "0.1",
+                "approx_kl": "0.01",
+                "entropy": "1",
+                "clip_fraction": "0.1",
+                "reference_kl": "0.2",
+            }
+        ],
+    }
+    _make_figures([run], [], tmp_path, 1)
+    assert (tmp_path / "reference_kl.png").stat().st_size > 1000
+    assert (tmp_path / "reference_kl.pdf").stat().st_size > 1000
 
 
 def test_csv_recovery_preserves_committed_rows_and_backs_up_tail(tmp_path):
@@ -92,6 +144,11 @@ def test_csv_resume_adds_columns_without_changing_committed_values(tmp_path):
     CsvJournal(path, ("board", "wins", "main_build_road"), committed_rows=2)
     with pytest.raises(ValueError, match="schema mismatch"):
         CsvJournal(path, ("wins", "board", "main_build_road"), committed_rows=2)
+    ordered = tmp_path / "ordered.csv"
+    earlier = CsvJournal(ordered, ("a", "c"))
+    earlier.write({"a": 1, "c": 3})
+    CsvJournal(ordered, ("a", "b", "c"), committed_rows=1)
+    assert read_csv(ordered) == [{"a": "1", "b": "", "c": "3"}]
 
 
 @pytest.mark.parametrize("deterministic", [True, False])

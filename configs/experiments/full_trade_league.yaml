@@ -1,0 +1,45 @@
+# League fork of full_trade_production_bc_kl. Trained only against heuristic bots, the 10M policy
+# wins 31% of its games but takes largest army in half of them because no bot buys dev cards;
+# with one other dev-card player at the table it drops to 19-21% and the bots win. Opponent seats
+# now sample the current policy, its recent snapshots, two fixed earlier policies and the
+# heuristic bot, so largest army is usually contested while the bots keep a building style in
+# the mix. Everything else (shaping, behaviour clone KL, PPO settings) stays the same:
+#   carla train <this> --init-from runs/full_trade_bc_kl_005/.../checkpoints/step_000010006528.pt
+extends: full_trade_production_bc_kl.yaml
+name: full_trade_league
+opponents:
+  pool:
+    - kind: self
+      weight: 0.4
+    - kind: snapshot
+      weight: 0.15
+    - kind: checkpoint
+      weight: 0.075
+      name: r8_7M
+      path: C:/Users/rafae/vscode/carla/runs/full_trade_bc_production/full_trade_production_heuristic-20261124-210028-ce6fcc76/checkpoints/step_000007003136.pt
+    - kind: checkpoint
+      weight: 0.075
+      name: bc_kl_10M
+      path: C:/Users/rafae/vscode/carla/runs/full_trade_bc_kl_005/full_trade_production_bc_kl-20261125-214543-762a7907/checkpoints/step_000010006528.pt
+    - kind: heuristic
+      weight: 0.3
+  snapshot_every: 50
+  max_snapshots: 10
+# The rest matches the settings the bc_kl run was launched with, so only the opponents differ,
+# except that its 32 games are spread over 8 rollout processes instead of 4: opponent networks
+# make collection CPU-bound, and the update still sees 32 x 224 decisions.
+ppo:
+  total_env_steps: 10000000
+  rollout_steps: 224
+  minibatch_size: 2048
+  micro_batch_size: 512  # The full model needs about 14 GB for a 2048 minibatch in one pass.
+eval:
+  every_env_steps: 1000000
+  boards: 25
+  retain_checkpoints: true
+runtime:
+  num_workers: 8
+  envs_per_worker: 4
+  device: cuda
+  checkpoint_every: 20
+  output_dir: C:/Users/rafae/vscode/carla/runs/full_trade_league

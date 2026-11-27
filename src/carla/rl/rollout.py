@@ -1,19 +1,140 @@
 """Experience collection.
 
-`collect_rollouts` batches one policy forward pass across several environments.
+`collect_rollouts` batches one policy forward pass across several environments, and batches
+the decisions of policy-played opponent seats (a `League`) per network between learner steps.
 `process_rollouts` runs this collector in synchronous CPU processes. The semi-asynchronous
-self-play `RolloutWorker` and opponent pool remain future work.
+`RolloutWorker` remains future work.
 """
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
 
-from carla.envs.catan_env import CatanEnv
+from carla.config.loader import from_dict
+from carla.config.schema import ExperimentConfig, PPOConfig
+from carla.envs.catan_env import CatanEnv, EnvSteps, ExternalAgent
 from carla.models.base import TARGET_KEY, PolicyNetwork, batch_observations, with_state
+from carla.models.factory import build_policy
 from carla.rl.buffer import RolloutBatch
 from carla.rl.metrics import EpisodeTracker, RolloutDiagnostics
+
+if TYPE_CHECKING:
+    from carla.rl.opponents import League
+
+REFERENCE_STATE_KEY = "reference_state"
+"""Observation entry holding the reference policy's own recurrent state before the decision."""
+REFERENCE_TYPE_KEY = "reference_type_logp"
+"""Stored observation entry: the reference policy's masked action-type log-probabilities."""
+
+
+def load_reference(config: PPOConfig, device: torch.device | str = "cpu") -> PolicyNetwork | None:
+    """The frozen reference policy of `ppo.reference_checkpoint`, or None when it is unused.
+
+    The reference keeps its own architecture (from the checkpoint's config) and recurrent state,
+    so any policy that reads the same observations can serve, e.g. a behaviour clone.
+    """
+    if config.reference_kl_coef <= 0:
+        return None
+    if config.reference_checkpoint is None:
+        raise ValueError("ppo.reference_kl_coef needs ppo.reference_checkpoint")
+    data = torch.load(config.reference_checkpoint, map_location="cpu", weights_only=False)
+    if data.get("config") is None:
+        raise ValueError(
+            f"reference checkpoint has no experiment config: {config.reference_checkpoint}"
+        )
+    reference = build_policy(from_dict(ExperimentConfig, data["config"]).model)
+    reference.load_state_dict(data["policy"])
+    reference.requires_grad_(False)
+    return reference.to(device).eval()
+
+
+def _with_reference_state(reference: PolicyNetwork, obs: dict, state: np.ndarray | None) -> dict:
+    """`obs` carrying the reference's state (zeros at an episode start or when missing)."""
+    if not reference.recurrent:
+        return obs
+    if state is None:
+        if REFERENCE_STATE_KEY in obs:
+            return obs
+        state = np.zeros(reference.state_dim, dtype=np.float32)
+    return {**obs, REFERENCE_STATE_KEY: np.asarray(state, dtype=np.float32)}
+
+
+@torch.no_grad()
+def _opponent_actions(
+    envs: Sequence[CatanEnv], waiting: list[tuple[int, int]], network: PolicyNetwork
+) -> list[np.ndarray]:
+    """One sampled decision of `network` for each waiting (env index, seat), batched."""
+    agents = []
+    observations = []
+    for i, seat in waiting:
+        agent = envs[i].seat_agent(seat)
+        assert isinstance(agent, ExternalAgent)
+        agents.append(agent)
+        observations.append(with_state(network, envs[i].aec.observe(seat), agent.state))
+    batch = batch_observations(observations, device=next(network.parameters()).device)
+    out = network(batch)
+    heads = out.distribution(batch["masks"]).sample().cpu().numpy()
+    if out.state is not None:
+        for agent, state in zip(agents, out.state.cpu().numpy(), strict=True):
+            agent.state = state
+    return list(heads)
+
+
+def run_env_steps(
+    envs: Sequence[CatanEnv],
+    steps: Sequence[EnvSteps | None],
+    policy: PolicyNetwork,
+    league: "League | None" = None,
+) -> list[Any]:
+    """Drive every env's `reset_steps`/`step_steps` to its result (None where `steps` is None).
+
+    Whenever envs wait on `ExternalAgent` seats, their decisions are batched per network: the
+    current `policy` plays "self" seats and the `league` supplies the others.
+    """
+    results: list[Any] = [None] * len(envs)
+    waiting: dict[int, int] = {}
+
+    def advance(i: int, action: Any) -> None:
+        generator = steps[i]
+        assert generator is not None
+        try:
+            waiting[i] = generator.send(action)
+        except StopIteration as stop:
+            results[i] = stop.value
+
+    for i, generator in enumerate(steps):
+        if generator is not None:
+            advance(i, None)
+    while waiting:
+        groups: dict[str, list[tuple[int, int]]] = {}
+        for i, seat in waiting.items():
+            agent = envs[i].seat_agent(seat)
+            assert isinstance(agent, ExternalAgent)
+            groups.setdefault(agent.key, []).append((i, seat))
+        waiting = {}
+        for key, group in groups.items():
+            network = policy if league is None else league.network(key, policy)
+            for (i, _), action in zip(group, _opponent_actions(envs, group, network), strict=True):
+                advance(i, action)
+    return results
+
+
+def reset_envs(
+    envs: Sequence[CatanEnv],
+    policy: PolicyNetwork,
+    league: "League | None" = None,
+    seeds: Sequence[int | None] | None = None,
+) -> list[dict]:
+    """Reset every env (sampling new league opponents) and return the learner observations."""
+    for env in envs:
+        if league is not None:
+            env.opponents = league.sample()
+    steps = [
+        env.reset_steps(seed=None if seeds is None else seeds[i]) for i, env in enumerate(envs)
+    ]
+    return [result[0] for result in run_env_steps(envs, steps, policy, league)]
 
 
 @torch.no_grad()
@@ -30,11 +151,16 @@ def collect_rollouts(
     diagnostics: RolloutDiagnostics | None = None,
     env_steps: int = 0,
     env_id_offset: int = 0,
+    reference: PolicyNetwork | None = None,
+    league: "League | None" = None,
 ) -> tuple[list[RolloutBatch], list[dict]]:
     """Collect `num_steps` decisions per env, retaining independent episode boundaries.
 
     Recurrent policies carry their state inside the returned observations (see `with_state`),
-    and every stored observation also holds the belief targets (`TARGET_KEY`).
+    and every stored observation also holds the belief targets (`TARGET_KEY`). With a
+    `reference` policy, each stored decision also holds its action-type log-probabilities
+    (`REFERENCE_TYPE_KEY`), and the reference carries its own state the same way. With a
+    `league`, every episode samples its opponents from it.
     """
     if not envs or num_steps <= 0:
         raise ValueError("need at least one environment and a positive num_steps")
@@ -45,21 +171,22 @@ def collect_rollouts(
     if trackers is not None and len(trackers) != len(envs):
         raise ValueError("trackers must match environments")
     recurrent = policy.recurrent
+    policy.eval()
+    if league is not None:
+        league.begin_rollout()
     current = (
         list(observations)
         if observations is not None
-        else [
-            env.reset(seed=None if episode_seeds is None else episode_seeds[i])[0]
-            for i, env in enumerate(envs)
-        ]
+        else reset_envs(envs, policy, league, episode_seeds)
     )
     if recurrent:
         current = [
             with_state(policy, _with_target(obs, env))
             for obs, env in zip(current, envs, strict=True)
         ]
+    if reference is not None:
+        current = [_with_reference_state(reference, obs, None) for obs in current]
     device = next(policy.parameters()).device
-    policy.eval()
     n = len(envs)
     steps: list[list[dict]] = [[] for _ in envs]
     actions: list[list[np.ndarray]] = [[] for _ in envs]
@@ -78,12 +205,29 @@ def collect_rollouts(
         head_arrays = heads.cpu().numpy()
         value_arrays = out.value.cpu().numpy()
         next_states = out.state.cpu().numpy() if out.state is not None else None
-        for i, env in enumerate(envs):
-            steps[i].append(current[i])
+        reference_types = reference_states = None
+        if reference is not None:
+            ref_out = reference(
+                batch, batch[REFERENCE_STATE_KEY].float() if reference.recurrent else None
+            )
+            ref_dist = ref_out.distribution(batch["masks"])
+            reference_types = ref_dist.logp["type"].float().cpu().numpy()
+            if ref_out.state is not None:
+                reference_states = ref_out.state.cpu().numpy()
+        for i in range(n):
+            stored = current[i]
+            if reference_types is not None:
+                stored = {**stored, REFERENCE_TYPE_KEY: reference_types[i]}
+            steps[i].append(stored)
             actions[i].append(head_arrays[i])
             log_probs[i].append(float(logp_arrays[i]))
             values[i].append(float(value_arrays[i]))
-            obs, reward, terminated, truncated, _ = env.step(head_arrays[i])
+        results = run_env_steps(
+            envs, [env.step_steps(head_arrays[i]) for i, env in enumerate(envs)], policy, league
+        )
+        resets: list[EnvSteps | None] = [None] * n
+        for i, env in enumerate(envs):
+            obs, reward, terminated, truncated, _ = results[i]
             done = terminated or truncated
             if trackers is not None:
                 record = trackers[i].step(
@@ -94,11 +238,24 @@ def collect_rollouts(
             rewards[i].append(reward)
             dones[i].append(done)
             if done:
-                obs = env.reset()[0]
+                if league is not None:
+                    env.opponents = league.sample()
+                resets[i] = env.reset_steps()
+            current[i] = obs
+        for i, result in enumerate(run_env_steps(envs, resets, policy, league)):
+            done = result is not None
+            obs = result[0] if done else current[i]
+            env = envs[i]
             if recurrent:
                 obs = _with_target(obs, env)
                 obs = with_state(
                     policy, obs, None if done or next_states is None else next_states[i]
+                )
+            if reference is not None:
+                obs = _with_reference_state(
+                    reference,
+                    obs,
+                    None if done or reference_states is None else reference_states[i],
                 )
             current[i] = obs
     last_values = policy(batch_observations(current, device=device)).value.cpu().numpy()

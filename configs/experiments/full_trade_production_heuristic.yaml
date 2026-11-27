@@ -1,0 +1,15 @@
+# Full model against three heuristic bots with production-aware shaping: the potential counts
+# own VP plus the expected income of settlements and cities, so building is credited when it
+# happens instead of only when the extra cards turn into points. Start from a behaviour clone:
+#   carla train <this> --init-from runs/bc/full_model_heuristic/bc.pt
+extends: full_trade_own_heuristic.yaml
+name: full_trade_production_heuristic
+env:
+  shaping: production
+  shaping_coef: 0.1
+  production_weight: 0.5
+  shaping_gamma: 0.995
+ppo:
+  gamma: 0.995
+  learning_rate: 0.0001
+  trade_entropy_coef: 0.001

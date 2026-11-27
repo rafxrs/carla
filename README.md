@@ -1,6 +1,6 @@
 # CARLA - Catan Advanced Reinforcement Learning Agent
 
-CARLA is a four-player Settlers of Catan reinforcement-learning project built on its own deterministic rules engine. Synchronous MLP and GNN PPO baselines train against fixed bots; self-play is planned.
+CARLA is a four-player Settlers of Catan reinforcement-learning project built on its own deterministic rules engine. Synchronous PPO trains MLP and GNN policies against bots or a league of the current policy, its snapshots and fixed checkpoints; the full model adds set attention, a GRU belief over opponents' cards, and a GRU decoder for multi-card trade offers.
 
 ## Status
 
@@ -8,11 +8,11 @@ CARLA is a four-player Settlers of Catan reinforcement-learning project built on
 | --------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `engine/` | engine     | Base rules, maritime trade, and domestic proposals, invitations, counteroffers, confirmation, configurable limits, snapshots, deterministic replay, and logs. Larger offers are validated when submitted. |
 | `config/` | shared     | Typed dataclasses, YAML `extends`, dotted overrides, strict validation.                                                                                                                                                                                                                                 |
-| `envs/`   | RL         | Factored action heads and masks, canonical multi-card offer tokens, public trade context, rewards, self-play env, Gymnasium env. |
-| `agents/` | eval/bots  | Random and heuristic bots, including domestic proposals and counteroffers when enabled. |
+| `envs/`   | RL         | Factored action heads and masks, canonical multi-card offer tokens, public trade context, rewards and potential-based shaping (own VP, VP margin, production), self-play env, Gymnasium env with opponent seats the caller can play (`ExternalAgent`). |
+| `agents/` | eval/bots  | Random and heuristic bots, including domestic proposals and counteroffers when enabled. Trained checkpoints play as `ppo:<path>` agents in tournaments and the GUI. |
 | `eval/`   | eval/bots  | Seeded tournaments with seat rotation and Wilson CIs, multi-process. Trade metrics, experiment CSV summaries, and learning/diagnostic plots. |
-| `models/` | models     | MLP and board GNN policies, masked action heads, and an optional GRU decoder for multi-card domestic offers. Set attention and belief remain TODOs. |
-| `rl/`     | RL         | Synchronous MLP/GNN PPO with batched CPU rollout workers, resumable CSV logging/checkpoints, fixed-bot validation, gamma/lambda sweeps, and checkpoint tournaments. Self-play opponent pools remain TODOs. |
+| `models/` | models     | MLP and board GNN policies, masked action heads, set attention, a GRU belief over opponents' hidden cards, and an optional GRU decoder for multi-card domestic offers. |
+| `rl/`     | RL         | Synchronous MLP/GNN PPO with batched CPU rollout workers, resumable CSV logging/checkpoints, fixed-bot validation, gamma/lambda sweeps, and checkpoint tournaments. Behaviour cloning of the heuristic bot as a warm start, a KL pull toward a reference policy, gradient accumulation, and league opponents (current policy, snapshots, checkpoints, bots). The semi-asynchronous worker remains a TODO. |
 | `gui/`    | GUI        | Arcade play, watch, and replay modes. Click resource cards to build a trade, then send it to the bank or the other players; offers, answers and counteroffers show their cards. Player trading is on unless `--no-trading`. |
 
 The domestic trade protocol, defaults, and extension points are documented in
@@ -65,8 +65,9 @@ sbatch --array=0-2 scripts/slurm/train.sbatch configs/experiments/ppo_mlp_baseli
 
 ```
 configs/          base.yaml, experiments/ (one ablation = one field), smoke.yaml, bots.yaml
-docs/img/         figures
-scripts/          benchmark_engine.py, render_board.py, slurm/train.sbatch
+docs/img/         figures (board, UML, heuristic bot: heuristic_setup.png, heuristic_turn.png)
+scripts/          benchmark_engine.py, render_board.py, run_experiments.py, analyze_runs.py,
+                  train_with_restarts.py, heuristic_figures.py, slurm/train.sbatch
 src/carla/
   engine/         rules engine, stdlib only                    [engine]
   config/         experiment config schema + loader            [shared]
@@ -109,7 +110,7 @@ Three contracts connect the workstreams:
 2. **Action masks**: `envs/action_space.py` documents the heads and the mask table.
 3. **Policy output**: `models/base.py` defines `PolicyOutput`; the factored distribution scores the baseline heads, and the optional trade distribution adds exact offer log-probabilities and sampled token entropy.
 
-Current training batches MLP or GNN actions across Gymnasium environments in each CPU rollout process and performs synchronous on-policy PPO updates. See [docs/ppo_mlp_baseline.md](docs/ppo_mlp_baseline.md) and [docs/ppo_gnn_baseline.md](docs/ppo_gnn_baseline.md). The planned semi-asynchronous self-play design is:
+Current training batches MLP or GNN actions across Gymnasium environments in each CPU rollout process and performs synchronous on-policy PPO updates. With a league opponent pool, the opponent seats played by networks are batched per network in the same processes. See [docs/ppo_mlp_baseline.md](docs/ppo_mlp_baseline.md), [docs/ppo_gnn_baseline.md](docs/ppo_gnn_baseline.md), and the full-model section of [docs/experiments.md](docs/experiments.md#full-model-training). The planned semi-asynchronous design is:
 
 ```mermaid
 flowchart LR

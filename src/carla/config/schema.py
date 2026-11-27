@@ -19,12 +19,17 @@ class EnvConfig:
     truncation_reward: float = 0.0
     vp_reward: float = 0.0
     """Shaping: reward per public victory point gained (0 disables)."""
-    shaping: Literal["none", "own", "margin"] = "none"
+    shaping: Literal["none", "own", "margin", "production"] = "none"
     """Potential-based shaping in `CatanEnv`: F = gamma * Phi(s') - Phi(s) between consecutive
     learner decisions, with Phi = 0 once the game is over, so the optimal policy is unchanged.
     own: Phi = shaping_coef * own VP (own hidden VP cards included); margin: Phi = shaping_coef *
-    (own VP - the top opponent's public VP)."""
+    (own VP - the top opponent's public VP); production: Phi = shaping_coef * (own VP +
+    production_weight * own expected resources per round), crediting settlements and cities for
+    their future income as soon as they are built."""
     shaping_coef: float = 0.1
+    production_weight: float = 0.5
+    """VP-equivalent of one expected resource per round (four rolls) for `shaping=production`.
+    An average settlement yields about 1.1 resources per round, so it is worth about 0.55 VP."""
     shaping_gamma: float = 0.999
     """Discount used by the shaping; must equal `ppo.gamma` to keep the optimal policy."""
     max_events: int = 64
@@ -57,6 +62,9 @@ class PPOConfig:
     """Decisions collected per environment before sending a batch to the learner."""
     epochs: int = 4
     minibatch_size: int = 4096
+    micro_batch_size: int | None = None
+    """Split each minibatch into chunks of this many decisions and accumulate their gradients
+    (None: one pass). The update is unchanged; peak GPU memory shrinks with the chunk."""
     learning_rate: float = 3e-4
     gamma: float = 0.999
     gae_lambda: float = 0.95
@@ -67,6 +75,12 @@ class PPOConfig:
     """Weight of the trade decoder's offer-token entropy (None: `entropy_coef`). The token term
     sums several tokens (about 5 nats against 0.2-0.8 for other heads), so at `entropy_coef` it
     dominates the bonus and keeps offers random; a smaller weight lets offers sharpen."""
+    reference_checkpoint: str | None = None
+    """Checkpoint (e.g. a behaviour clone) whose action-type choices regularize the policy."""
+    reference_kl_coef: float = 0.0
+    """Weight of KL(reference || policy) over the action type. The forward direction keeps
+    probability on every type the reference plays (such as ending the turn to save up), which
+    an entropy bonus cannot do for types the policy has driven to near-zero probability."""
     max_grad_norm: float = 0.5
     target_kl: float | None = None
     max_policy_lag: int = 1
@@ -81,6 +95,8 @@ class OpponentSpec:
     weight: float = 1.0
     path: str | None = None
     """Checkpoint file for kind == "checkpoint"."""
+    name: str | None = None
+    """Label of a "checkpoint" opponent in the episode journal (default: the file stem)."""
 
 
 @dataclass(frozen=True)

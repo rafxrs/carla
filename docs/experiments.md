@@ -1,4 +1,8 @@
-# Training experiments and analysis
+# PPO experiments and analysis
+
+The sweep and analysis tools below were built for the MLP baseline and apply to every model.
+The [full-model training](#full-model-training) section covers the full GNN model's warm start,
+reward shaping, behaviour-clone regularization, and league opponents.
 
 Each training run saves CSV metrics, the resolved config, and hardware/software details.
 No additional dependencies beyond the existing project extras are needed.
@@ -101,7 +105,8 @@ Each run contains:
 * `train.log`: timestamped console progress and validation results, appended on resume.
 * `updates.csv`: one row per PPO update, with cumulative learner decisions, optimizer steps,
   collection/update time, cumulative training/evaluation/wall time, throughput, losses,
-  approximate sampled KL, clip fraction, pre-clipping gradient norm, explained variance,
+  approximate sampled KL, reference action-type KL when enabled, clip fraction,
+  pre-clipping gradient norm, explained variance,
   and raw advantage/return/value statistics. CSV logging occurs every update regardless
   of the console logging interval.
 * `episodes.csv`: one row per completed training episode, including its env/episode ID,
@@ -162,8 +167,8 @@ For an individual run:
 uv run --no-sync carla train configs/experiments/lambda_study.yaml --resume runs/<run>/latest.pt ppo.total_env_steps=2097152
 ```
 
-On resume, you can extend `ppo.total_env_steps` and change the device, log interval, or
-checkpoint interval. Keep the seed, game rules, model, opponents, evaluation settings,
+On resume, you can extend `ppo.total_env_steps` and change the device, log interval,
+checkpoint interval, or `ppo.micro_batch_size`. Keep the seed, game rules, model, opponents, evaluation settings,
 other PPO settings, `runtime.num_workers`, and `runtime.envs_per_worker` the same.
 Checkpoints save episode accumulators, optimizer counters, CSV committed-row counts,
 and cumulative timers. On resume, uncommitted CSV tails are removed and backed up as
@@ -180,14 +185,119 @@ weights or training environments. Changing evaluation frequency should not chang
 actions. Greedy validation measures deployed greedy behavior; sampled validation uses a
 separate fixed RNG and can be selected with `eval.deterministic=false`.
 
+## Full-model training
+
+The full model (`configs/experiments/full_trade.yaml`) is the GNN with set attention, the GRU
+belief, and the GRU trade decoder, with multi-card domestic trading on. Its later stages are
+forks: each starts a new run from an earlier run's weights.
+
+### Warm starts and long runs
+
+`--init-from` starts a new run from another run's policy weights. The optimizer, counters,
+environments, and journals start fresh, so opponents, rewards, and PPO settings may change
+between stages; the model config must match exactly.
+
+```powershell
+uv run --no-sync carla train configs/experiments/full_trade_league.yaml --init-from runs/<run>/checkpoints/step_000010006528.pt
+```
+
+For long runs, `scripts/train_with_restarts.py` runs `carla train` and resumes the newest run
+under `runtime.output_dir` from `latest.pt` whenever the process dies (for example after a GPU
+reset). `--init-from` applies to the first launch only; overrides pass through to every resume.
+
+```powershell
+uv run --no-sync python scripts/train_with_restarts.py configs/experiments/full_trade_league.yaml runtime.output_dir=runs/full_trade_league --init-from runs/<run>/checkpoints/<step>.pt
+```
+
+### Behaviour cloning
+
+`carla bc` plays games in which the heuristic bot makes the learner's decisions against the
+config's opponents, then trains the policy on those decisions (action log-likelihood), the value
+head on the expert's discounted returns, and the belief head. Use the resulting `bc.pt` as an
+`--init-from` warm start or as a reference policy.
+
+```powershell
+uv run --no-sync carla bc configs/experiments/full_trade_own_heuristic.yaml --output runs/bc/full_model_heuristic --games 600 --workers 4 runtime.device=cuda
+```
+
+### Reward shaping
+
+`env.shaping` adds potential-based shaping F = gamma * Phi(s') - Phi(s) between the learner's
+decisions (Phi = 0 once the game is over, so the optimal policy is unchanged; `env.shaping_gamma`
+must equal `ppo.gamma`):
+
+| `env.shaping` | Phi / `env.shaping_coef` |
+| --- | --- |
+| `own` | own VP, hidden VP cards included |
+| `margin` | own VP minus the top opponent's public VP |
+| `production` | own VP plus `env.production_weight` times own expected resources per round |
+
+`production` credits a settlement or city for its future income as soon as it is built. An
+average settlement yields about 1.1 resources per round, so weight 0.5 values it at about
+0.55 VP on top of its point.
+
+### Behaviour-clone regularization and memory
+
+`ppo.reference_kl_coef` adds that coefficient times KL(reference || policy) over the masked
+action type to the loss, with the frozen reference loaded from `ppo.reference_checkpoint`
+(for example the behaviour clone). The forward direction penalises the policy for nearly ruling
+out a type the reference plays, such as ending the turn to save up, while where to build, which
+trade, and which card stay free. Rollout workers run the reference with its own recurrent
+state and store its action-type log-probabilities with each decision; `updates.csv` logs the
+mean as `reference_kl`. A coefficient of 0.05 kept the policy saving without stalling it; 0.2
+pulled it too close to the clone.
+
+`ppo.micro_batch_size` splits each minibatch into chunks whose gradients are accumulated, with
+each chunk's mean loss weighted by its share of the minibatch. The update is the same; peak GPU
+memory drops (the full model peaks at about 14 GB for a 2048-decision minibatch without it).
+`ppo.trade_entropy_coef` weights the trade decoder's token entropy separately from
+`ppo.entropy_coef`.
+
+### League opponents
+
+A pool of only `random` and `heuristic` specs gives each environment fixed bots for the whole
+run. Adding any policy kind makes the pool a league: each opponent seat of each game samples a
+spec in proportion to its weight.
+
+| Kind | Opponent | Label in `episodes.csv` |
+| --- | --- | --- |
+| `random`, `heuristic` | that bot | the bot's name |
+| `self` | the current policy | `self` |
+| `snapshot` | a frozen copy of the policy, taken every `opponents.snapshot_every` updates (the newest `opponents.max_snapshots` kept) | `snapshot:<update>` |
+| `checkpoint` | the fixed policy in `path`, with the same engine rules and `env.max_events` | `name`, or the file stem |
+
+Policy opponents sample their actions and keep their own belief state. Each rollout process
+batches the waiting opponent decisions of its environments per network, so every network runs
+once per round. Snapshots live in the rollout processes: games starting in one rollout share
+one snapshot, and snapshots are not saved in checkpoints, so after a resume `snapshot` seats
+play the current policy until the next snapshot. Expect slower collection than against bots:
+each learner decision brings about two opponent network passes.
+
+### Full-model configs
+
+| Config | Starts from | Change |
+| --- | --- | --- |
+| `full_trade.yaml` | scratch | full model against three random bots |
+| `full_trade_own.yaml`, `full_trade_margin.yaml` | scratch | own-VP or VP-margin shaping |
+| `full_trade_own_mixed.yaml` | a stage-1 checkpoint | two random bots and one heuristic bot per table |
+| `full_trade_own_heuristic.yaml` | a stage-1 checkpoint | three heuristic bots |
+| `full_trade_production_heuristic.yaml` | the behaviour clone | production shaping (weight 0.5) |
+| `full_trade_production_push.yaml` | the previous stage | production weight 1.0, `max_grad_norm` 1.0 |
+| `full_trade_production_bc_kl.yaml` | the previous stage | KL 0.05 toward the behaviour clone (`_strong`: 0.2) |
+| `full_trade_league.yaml` | the previous stage | league: 40% self, 15% snapshots, two fixed checkpoints, 30% heuristic |
+
+`scripts/heuristic_figures.py` plays games between heuristic bots and draws how the bot places
+its opening (`docs/img/heuristic_setup.png`) and its turn as a state machine with measured branch
+frequencies (`docs/img/heuristic_turn.png`); it needs Graphviz.
+
 ## Analysis and final tests
 
 Analysis accepts individual run directories or a sweep root. It rejects duplicate records,
 nonfinite update metrics and missing seat rotations; incomplete runs are skipped unless
 `--include-incomplete` is specified. Use one attempt per configuration/training seed.
 
-Build the report figures with one command. It produces a `report.md` index and separate
-training, BC and tournament sections, all with the same colours and PNG/PDF exports:
+Build the training, BC and tournament report figures with one command. It produces a
+`report.md` index and sections with the same colours and PNG/PDF exports:
 
 ```powershell
 uv run --no-sync python scripts/build_report_figures.py runs/final --output outputs/report --bc runs/bc-full --tournament outputs/policy-tournament.csv
@@ -200,8 +310,8 @@ exported final games, and `--smooth-updates 25` to set the PPO diagnostic moving
 Tournament figures resample whole boards, keeping the four seat rotations together;
 small tournaments still give exploratory intervals.
 Run design in the report is read from each saved config: reward shaping, opponent pool,
-snapshot schedule and KL early-stop target. A KL penalty is not part of the current PPO
-config and is not implied by its KL early-stop target.
+snapshot schedule, KL early-stop target and any reference-policy KL penalty. The two
+KL settings have different purposes.
 
 New forks record their cumulative starting decision count in metadata and checkpoints;
 graphs place their first evaluation at the parent checkpoint's decision count. Older
@@ -219,7 +329,8 @@ Outputs include:
   (runs then boards, four seats together). The change is blank for final test exports,
   which have no step-zero test evaluation.
 * Matching PNG/PDF figures: win rate/VP/truncation curves against cumulative decisions
-  and wall time, four smoothed PPO diagnostics, main-phase strategy and trade choices,
+  and wall time, four smoothed PPO diagnostics, reference KL when enabled,
+  main-phase strategy and trade choices,
   and rolling training-episode returns/VP/turns/truncations.
 * `report.md`: a readable index of final evaluation rows, plots and interpretation limits.
 * `report.json`: data warnings and interpretation limits.

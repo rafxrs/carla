@@ -55,6 +55,7 @@ UPDATE_FIELDS = (
     "decisions_per_second",
     *PPO_FIELDS,
     *DIAGNOSTIC_FIELDS,
+    "reference_kl",  # Appended last: older journals gain it on resume (see CsvJournal).
 )
 EPISODE_FIELDS = (
     "update",

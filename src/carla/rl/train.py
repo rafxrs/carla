@@ -22,10 +22,10 @@ from carla.rl.metrics import (
     EpisodeTracker,
     RolloutDiagnostics,
 )
-from carla.rl.opponents import bot_tables
+from carla.rl.opponents import League, bot_tables, is_league, validate_pool
 from carla.rl.ppo import PPOLearner
 from carla.rl.process_rollouts import SynchronousRolloutPool
-from carla.rl.rollout import collect_rollouts
+from carla.rl.rollout import collect_rollouts, load_reference, reset_envs
 from carla.utils.logging import CsvJournal, write_json
 from carla.utils.runs import (
     checkpoint_global_step,
@@ -69,7 +69,7 @@ def _validate(config: ExperimentConfig) -> None:
         raise ValueError("model.max_trade_cards_per_side must be positive")
     if config.runtime.num_workers <= 0 or config.runtime.envs_per_worker <= 0:
         raise ValueError("synchronous PPO requires positive workers and environments per worker")
-    bot_tables(config.opponents, config.runtime.num_workers, config.runtime.envs_per_worker)
+    validate_pool(config.opponents)
     if config.ppo.total_env_steps <= 0 or config.ppo.rollout_steps <= 0:
         raise ValueError("PPO step budgets must be positive")
     if config.ppo.epochs <= 0 or config.ppo.minibatch_size <= 0:
@@ -80,6 +80,12 @@ def _validate(config: ExperimentConfig) -> None:
         raise ValueError("torch_threads_per_worker must be positive")
     if not 0 <= config.ppo.gae_lambda <= 1 or not 0 <= config.ppo.gamma <= 1:
         raise ValueError("gamma and gae_lambda must be between zero and one")
+    if config.ppo.micro_batch_size is not None and config.ppo.micro_batch_size <= 0:
+        raise ValueError("ppo.micro_batch_size must be positive")
+    if config.ppo.reference_kl_coef < 0:
+        raise ValueError("ppo.reference_kl_coef cannot be negative")
+    if config.ppo.reference_kl_coef > 0 and config.ppo.reference_checkpoint is None:
+        raise ValueError("ppo.reference_kl_coef needs ppo.reference_checkpoint")
     if config.env.shaping != "none" and config.env.shaping_gamma != config.ppo.gamma:
         raise ValueError("env.shaping_gamma must equal ppo.gamma for potential-based shaping")
     if config.eval.every_env_steps < 0 or config.eval.boards <= 0:
@@ -134,14 +140,31 @@ def train(
     device = resolve_device(config.runtime.device)
     policy = build_policy(config.model)
     learner = PPOLearner(policy, config.ppo, str(device))
-    envs = (
-        [
+    # Worker processes load their own reference; only in-process collection needs this one.
+    reference = load_reference(config.ppo, device) if config.runtime.num_workers == 1 else None
+    league = (
+        League(
+            config.opponents,
+            config.engine,
+            config.env,
+            derive_seed(config.seed, "worker", 0, "league"),
+            device,
+        )
+        if config.runtime.num_workers == 1 and is_league(config.opponents)
+        else None
+    )
+    if config.runtime.num_workers > 1:
+        envs = []
+    elif league is not None:
+        envs = [
+            CatanEnv(config.engine, config.env, league.sample())
+            for _ in range(config.runtime.envs_per_worker)
+        ]
+    else:
+        envs = [
             CatanEnv(config.engine, config.env, [make_agent(kind) for kind in table])
             for table in bot_tables(config.opponents, 1, config.runtime.envs_per_worker)[0]
         ]
-        if config.runtime.num_workers == 1
-        else []
-    )
     observations = None
     env_steps = 0
     state = {}
@@ -156,7 +179,10 @@ def train(
             if saved[section] != current[section]:
                 raise ValueError(f"resume config mismatch: {section}")
         for key in current["ppo"]:
-            if key != "total_env_steps" and saved["ppo"][key] != current["ppo"][key]:
+            # Neither the step budget nor gradient accumulation changes what a run learns.
+            if key in ("total_env_steps", "micro_batch_size"):
+                continue
+            if saved["ppo"][key] != current["ppo"][key]:
                 raise ValueError(f"resume config mismatch: ppo.{key}")
         if saved["runtime"]["num_workers"] != current["runtime"]["num_workers"]:
             raise ValueError("resume config mismatch: runtime.num_workers")
@@ -168,10 +194,12 @@ def train(
             if saved_workers is None or len(saved_workers) != config.runtime.num_workers:
                 raise ValueError("resume worker count does not match runtime.num_workers")
             for worker in saved_workers:
-                for obs in worker["observations"]:
+                for obs in worker["observations"] or []:
                     _upgrade_trade_observation(obs, config.engine.max_trade_cards_per_side)
         elif "envs" in state:
             envs, observations = state["envs"], state["observations"]
+            if league is not None and state.get("league") is not None:
+                league.restore(state["league"])
         elif config.runtime.envs_per_worker == 1:
             envs, observations = [state["env"]], [state["obs"]]
         else:
@@ -198,16 +226,18 @@ def train(
         init_from = Path(init_from).resolve()
         lineage_start = _load_initial_weights(init_from, policy, config)
     if resume is None and config.runtime.num_workers == 1:
-        observations = [
-            env.reset(
-                seed=(
-                    derive_seed(config.seed, "worker", 0)
-                    if i == 0
-                    else derive_seed(config.seed, "worker", 0, "env", i)
-                )
-            )[0]
-            for i, env in enumerate(envs)
+        seeds = [
+            (
+                derive_seed(config.seed, "worker", 0)
+                if i == 0
+                else derive_seed(config.seed, "worker", 0, "env", i)
+            )
+            for i in range(len(envs))
         ]
+        if league is not None:
+            observations = reset_envs(envs, policy, league, seeds)
+        else:
+            observations = [env.reset(seed=seed)[0] for env, seed in zip(envs, seeds, strict=True)]
 
     trackers = state.get("trackers", [EpisodeTracker(partial=resume is not None) for _ in envs])
     committed = state.get("log_rows", {})
@@ -256,6 +286,7 @@ def train(
                 "observations": observations,
                 "trackers": trackers,
                 "worker_states": pool.snapshot() if pool is not None else None,
+                "league": None if league is None else league.state(),
                 "log_rows": {k: v.rows for k, v in journals.items()},
                 "training_seconds": training_seconds,
                 "evaluation_seconds": evaluation_seconds,
@@ -337,6 +368,8 @@ def train(
                     policy, learner.version, steps, active, env_steps
                 )
             else:
+                if league is not None:
+                    league.add_snapshot(policy, learner.version)
                 batches, next_observations = collect_rollouts(
                     envs[:active],
                     policy,
@@ -347,6 +380,8 @@ def train(
                     episode_records=records,
                     diagnostics=diagnostics,
                     env_steps=env_steps,
+                    reference=reference,
+                    league=league,
                 )
                 observations[:active] = next_observations
             if device.type == "cuda":

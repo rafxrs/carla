@@ -12,6 +12,19 @@ from carla.models.base import PolicyNetwork
 from carla.models.distributions import TradeDistribution
 from carla.rl.buffer import RolloutBatch
 from carla.rl.gae import compute_gae
+from carla.rl.rollout import REFERENCE_TYPE_KEY
+
+
+def type_kl(reference_logp: torch.Tensor, logp: torch.Tensor) -> torch.Tensor:
+    """Per-row KL(reference || policy) between masked log-probability rows (-inf = illegal).
+
+    Types the reference never plays contribute nothing; both rows share the decision's mask, so
+    the policy is finite wherever the reference has probability."""
+    p_ref = reference_logp.exp()
+    played = p_ref > 0
+    ref = torch.where(played, reference_logp, 0.0)
+    own = torch.where(played, logp, 0.0)
+    return (p_ref * (ref - own)).sum(1)
 
 
 def _concat(trees: list[dict]) -> dict:
@@ -110,60 +123,44 @@ class PPOLearner:
                 "auxiliary_loss",
             )
         }
+        reference_coef = self.config.reference_kl_coef
+        if reference_coef > 0:
+            if REFERENCE_TYPE_KEY not in obs:
+                raise ValueError("ppo.reference_kl_coef needs rollouts collected with a reference")
+            stats["reference_kl"] = []
         early_stop = False
+        chunk_size = self.config.micro_batch_size or self.config.minibatch_size
         for _ in range(self.config.epochs):
             for indices in torch.randperm(len(actions)).split(self.config.minibatch_size):
                 indices = indices.to(self.device)
-                mini = _select(obs, indices)
-                out = self.policy(mini)
-                dist = out.distribution(mini["masks"])
-                logratio = dist.log_prob(actions[indices]) - old_logp[indices]
-                ratio = logratio.exp()
-                surrogate = advantages_t[indices] * ratio
-                clipped = advantages_t[indices] * ratio.clamp(
-                    1 - self.config.clip_coef, 1 + self.config.clip_coef
-                )
-                policy_loss = -torch.minimum(surrogate, clipped).mean()
-                value_loss = (out.value - returns_t[indices]).square().mean()
-                entropy = dist.entropy().mean()
-                trade_coef = self.config.trade_entropy_coef
-                if trade_coef is None or not isinstance(dist, TradeDistribution):
-                    bonus = self.config.entropy_coef * entropy
-                else:
-                    bonus = (
-                        self.config.entropy_coef * dist.head_entropy().mean()
-                        + trade_coef * dist.token_entropy().mean()
-                    )
-                loss = policy_loss + self.config.value_coef * value_loss - bonus
-                auxiliary = self.policy.auxiliary_loss(out, mini)
-                if auxiliary is not None:
-                    loss = loss + auxiliary
-                else:
-                    auxiliary = torch.zeros((), device=self.device)
-                if not torch.isfinite(loss):
-                    raise FloatingPointError("non-finite PPO loss")
+                # Gradient accumulation: each chunk's loss is a mean, so weighting it by the
+                # chunk's share of the minibatch gives the same gradient as one pass.
                 self.optimizer.zero_grad(set_to_none=True)
-                loss.backward()
+                parts: dict[str, float] = {}
+                for chunk in indices.split(chunk_size):
+                    weight = len(chunk) / len(indices)
+                    loss, terms = self._loss(
+                        _select(obs, chunk),
+                        actions[chunk],
+                        old_logp[chunk],
+                        advantages_t[chunk],
+                        returns_t[chunk],
+                    )
+                    if not torch.isfinite(loss):
+                        raise FloatingPointError("non-finite PPO loss")
+                    (loss * weight).backward()
+                    for name, value in terms.items():
+                        parts[name] = parts.get(name, 0.0) + weight * float(value)
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     self.policy.parameters(), self.config.max_grad_norm
                 )
                 if not torch.isfinite(grad_norm):
                     raise FloatingPointError("non-finite PPO gradient")
                 self.optimizer.step()
-                with torch.no_grad():
-                    approx_kl = ((ratio - 1) - logratio).mean()
-                    clip_fraction = ((ratio - 1).abs() > self.config.clip_coef).float().mean()
-                for name, value in (
-                    ("policy_loss", policy_loss),
-                    ("value_loss", value_loss),
-                    ("entropy", entropy),
-                    ("approx_kl", approx_kl),
-                    ("clip_fraction", clip_fraction),
-                    ("grad_norm", grad_norm),
-                    ("auxiliary_loss", auxiliary),
-                ):
-                    stats[name].append(float(value.detach()))
-                if self.config.target_kl is not None and approx_kl > self.config.target_kl:
+                parts["grad_norm"] = float(grad_norm)
+                for name, value in parts.items():
+                    stats[name].append(value)
+                if self.config.target_kl is not None and parts["approx_kl"] > self.config.target_kl:
                     early_stop = True
                     break
             if early_stop:
@@ -178,3 +175,46 @@ class PPOLearner:
         result["optimizer_steps"] = len(stats["policy_loss"])
         result.update(raw_stats)
         return result
+
+    def _loss(
+        self,
+        mini: dict,
+        actions: torch.Tensor,
+        old_logp: torch.Tensor,
+        advantages: torch.Tensor,
+        returns: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """PPO loss (batch means) of some decisions, plus detached terms for the update stats."""
+        out = self.policy(mini)
+        dist = out.distribution(mini["masks"])
+        logratio = dist.log_prob(actions) - old_logp
+        ratio = logratio.exp()
+        surrogate = advantages * ratio
+        clipped = advantages * ratio.clamp(1 - self.config.clip_coef, 1 + self.config.clip_coef)
+        policy_loss = -torch.minimum(surrogate, clipped).mean()
+        value_loss = (out.value - returns).square().mean()
+        entropy = dist.entropy().mean()
+        trade_coef = self.config.trade_entropy_coef
+        if trade_coef is None or not isinstance(dist, TradeDistribution):
+            bonus = self.config.entropy_coef * entropy
+        else:
+            bonus = (
+                self.config.entropy_coef * dist.head_entropy().mean()
+                + trade_coef * dist.token_entropy().mean()
+            )
+        loss = policy_loss + self.config.value_coef * value_loss - bonus
+        terms = {"policy_loss": policy_loss, "value_loss": value_loss, "entropy": entropy}
+        if self.config.reference_kl_coef > 0:
+            reference_kl = type_kl(mini[REFERENCE_TYPE_KEY], dist.logp["type"]).mean()
+            loss = loss + self.config.reference_kl_coef * reference_kl
+            terms["reference_kl"] = reference_kl
+        auxiliary = self.policy.auxiliary_loss(out, mini)
+        if auxiliary is not None:
+            loss = loss + auxiliary
+        else:
+            auxiliary = torch.zeros((), device=self.device)
+        terms["auxiliary_loss"] = auxiliary
+        with torch.no_grad():
+            terms["approx_kl"] = ((ratio - 1) - logratio).mean()
+            terms["clip_fraction"] = ((ratio - 1).abs() > self.config.clip_coef).float().mean()
+        return loss, {name: value.detach() for name, value in terms.items()}
