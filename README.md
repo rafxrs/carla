@@ -25,6 +25,10 @@ documented in [docs/experiments.md](docs/experiments.md).
 
 ## Setup
 
+Benchmark opponents (Catanatron and JSettlers bots, as native ports and wrapped originals) are
+documented in [the benchmark guide](docs/benchmarks/README.md); [how the agents play](docs/agents.md)
+summarises every bot's decision loop.
+
 Python 3.11+. With [uv](https://docs.astral.sh/uv/) (recommended):
 
 ```bash
@@ -179,7 +183,7 @@ stateDiagram-v2
 - **Own self-play env instead of PettingZoo.** `CatanAECEnv` follows the agent-environment-cycle pattern, and `CatanEnv` is the Gymnasium single-learner wrapper. The conditional masks do not fit PettingZoo's flat `action_mask`, and workers must choose the policy for each seat. An adapter can be added later.
 
 ## Contribute
-2026 - All code (game engine, RL, GUI, tests, etc.) was written from scratch and is intellectual property of Rafael Reis, Lucas Bessai, Suraj Vadulas and Dan Suissa.
+2026 - Original CARLA engine, RL, GUI and test code is intellectual property of Rafael Reis, Lucas Bessai, Suraj Vadulas and Dan Suissa. Reused benchmark adapter code and derived ports retain their upstream attribution and licenses; see the notices in the adapter directories.
 Starting Jan 2027, contributions are welcome - If you want to contribute to the project, fork the repository and submit a PR.
 
 ## References

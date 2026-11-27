@@ -1,0 +1,205 @@
+{
+  "schema": 2,
+  "date": "2026-11-26",
+  "whole_policy_equivalence_established": false,
+  "jsettlers_native_vs_java_adapter": {
+    "command": "scripts/check_jsettlers_policy.py --compatibility java-adapter --seed S --seats 0 1 2 3 --max-decisions 400 [--trading]",
+    "seeds_12_31_47_58": {
+      "fast-no-trading": {
+        "cases": 16,
+        "diverging_cases": 0,
+        "decisions": 1280,
+        "agreements": 1280
+      },
+      "fast-trading": {
+        "cases": 16,
+        "diverging_cases": 0,
+        "decisions": 2197,
+        "agreements": 2197
+      },
+      "smart-no-trading": {
+        "cases": 16,
+        "diverging_cases": 0,
+        "decisions": 1342,
+        "agreements": 1342
+      },
+      "smart-trading": {
+        "cases": 16,
+        "diverging_cases": 0,
+        "decisions": 2400,
+        "agreements": 2400
+      }
+    },
+    "seeds_101_202_303_404": {
+      "fast-no-trading": {
+        "cases": 16,
+        "diverging_cases": 1,
+        "decisions": 1197,
+        "agreements": 1196
+      },
+      "fast-trading": {
+        "cases": 16,
+        "diverging_cases": 1,
+        "decisions": 2039,
+        "agreements": 2038
+      },
+      "smart-no-trading": {
+        "cases": 16,
+        "diverging_cases": 0,
+        "decisions": 1245,
+        "agreements": 1245
+      },
+      "smart-trading": {
+        "cases": 16,
+        "diverging_cases": 0,
+        "decisions": 2171,
+        "agreements": 2171
+      }
+    },
+    "known_divergence": "seed 202 seat 2 (FAST): equal-length road prerequisites first appear in Java's setup-time incremental expansion order"
+  },
+  "catanatron_native_vs_original_on_catanatron_engine": {
+    "command": "scripts/check_catanatron_policy.py compare --bots B --seeds 12 31 47 58 --information open --chance C",
+    "python_hash_seed": "0",
+    "ab2_deadline": "lifted",
+    "groups": {
+      "ab2-exact": {
+        "cases": 16,
+        "decisions": 986,
+        "agreements": 958,
+        "native_ties": 1,
+        "by_phase": {
+          "BUILD_INITIAL_ROAD": {
+            "agreed": 32,
+            "compared": 32
+          },
+          "BUILD_INITIAL_SETTLEMENT": {
+            "agreed": 32,
+            "compared": 32
+          },
+          "DISCARD": {
+            "agreed": 105,
+            "compared": 113
+          },
+          "MAIN": {
+            "agreed": 505,
+            "compared": 512
+          },
+          "MOVE_ROBBER": {
+            "agreed": 26,
+            "compared": 39
+          },
+          "PRE_ROLL": {
+            "agreed": 256,
+            "compared": 256
+          },
+          "ROAD_BUILDING": {
+            "agreed": 2,
+            "compared": 2
+          }
+        }
+      },
+      "ab2-upstream": {
+        "cases": 16,
+        "decisions": 986,
+        "agreements": 984,
+        "native_ties": 0,
+        "by_phase": {
+          "BUILD_INITIAL_ROAD": {
+            "agreed": 32,
+            "compared": 32
+          },
+          "BUILD_INITIAL_SETTLEMENT": {
+            "agreed": 32,
+            "compared": 32
+          },
+          "DISCARD": {
+            "agreed": 113,
+            "compared": 113
+          },
+          "MAIN": {
+            "agreed": 510,
+            "compared": 512
+          },
+          "MOVE_ROBBER": {
+            "agreed": 39,
+            "compared": 39
+          },
+          "PRE_ROLL": {
+            "agreed": 256,
+            "compared": 256
+          },
+          "ROAD_BUILDING": {
+            "agreed": 2,
+            "compared": 2
+          }
+        }
+      },
+      "f-exact": {
+        "cases": 16,
+        "decisions": 1381,
+        "agreements": 1368,
+        "native_ties": 0,
+        "by_phase": {
+          "BUILD_INITIAL_ROAD": {
+            "agreed": 32,
+            "compared": 32
+          },
+          "BUILD_INITIAL_SETTLEMENT": {
+            "agreed": 32,
+            "compared": 32
+          },
+          "DISCARD": {
+            "agreed": 223,
+            "compared": 223
+          },
+          "MAIN": {
+            "agreed": 675,
+            "compared": 675
+          },
+          "MOVE_ROBBER": {
+            "agreed": 52,
+            "compared": 64
+          },
+          "PRE_ROLL": {
+            "agreed": 354,
+            "compared": 355
+          }
+        }
+      },
+      "f-upstream": {
+        "cases": 16,
+        "decisions": 1381,
+        "agreements": 1381,
+        "native_ties": 0,
+        "by_phase": {
+          "BUILD_INITIAL_ROAD": {
+            "agreed": 32,
+            "compared": 32
+          },
+          "BUILD_INITIAL_SETTLEMENT": {
+            "agreed": 32,
+            "compared": 32
+          },
+          "DISCARD": {
+            "agreed": 223,
+            "compared": 223
+          },
+          "MAIN": {
+            "agreed": 675,
+            "compared": 675
+          },
+          "MOVE_ROBBER": {
+            "agreed": 64,
+            "compared": 64
+          },
+          "PRE_ROLL": {
+            "agreed": 355,
+            "compared": 355
+          }
+        }
+      }
+    },
+    "whole_game_identity_upstream_mode": "F seeds 3, 7 and AB2 seeds 3, 7: every action and chance outcome identical"
+  }
+}
