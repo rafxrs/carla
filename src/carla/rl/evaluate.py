@@ -1,6 +1,7 @@
 """Frozen-policy evaluation on held-out boards with individual game records."""
 
 import csv
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -9,13 +10,16 @@ import torch
 from carla.agents import make_agent
 from carla.config.loader import from_dict
 from carla.config.schema import ExperimentConfig
+from carla.engine.actions import ActionType
 from carla.engine.rng import derive_seed
+from carla.engine.state import Phase
+from carla.envs.action_space import decode_action
 from carla.envs.catan_env import CatanEnv
 from carla.eval.metrics import wilson_interval
 from carla.models.base import batch_observations
 from carla.models.factory import build_policy
 from carla.rl.checkpoint import isolated_rng
-from carla.rl.metrics import EVALUATION_FIELDS
+from carla.rl.metrics import ACTION_FIELDS, EVALUATION_FIELDS, PHASE_ACTION_FIELDS
 from carla.utils.logging import CsvJournal
 
 
@@ -63,6 +67,7 @@ def evaluate_policy(
                     try:
                         obs, _ = env.reset(seed=game_seed)
                         done, reward_sum, decisions = False, 0.0, 0
+                        actions = Counter()
                         state = policy.initial_state(1, device)
                         while not done:
                             batch = batch_observations([obs], device=device)
@@ -71,9 +76,36 @@ def evaluate_policy(
                             heads = out.distribution(batch["masks"]).sample(
                                 deterministic=deterministic
                             )
-                            obs, reward, terminated, truncated, info = env.step(
-                                heads[0].cpu().numpy()
-                            )
+                            selected = heads[0].cpu().numpy()
+                            action = decode_action(selected, seat)
+                            phase = env.game.phase
+                            field = f"action_{action.type.name.lower()}"
+                            if field in ACTION_FIELDS:
+                                actions[field] += 1
+                            if phase == Phase.MAIN:
+                                actions["main_decisions"] += 1
+                                main_field = f"main_{action.type.name.lower()}"
+                                if main_field in PHASE_ACTION_FIELDS:
+                                    actions[main_field] += 1
+                            elif (
+                                phase == Phase.ROAD_BUILDING
+                                and action.type == ActionType.BUILD_ROAD
+                            ):
+                                actions["road_building_roads"] += 1
+                            elif (
+                                phase == Phase.TRADE_RESPONSE
+                                and action.type == ActionType.PROPOSE_TRADE
+                            ):
+                                actions["counteroffers"] += 1
+                            if action.type == ActionType.PROPOSE_TRADE:
+                                assert action.trade is not None
+                                if max(sum(action.trade.give), sum(action.trade.receive)) > 1:
+                                    actions["action_multi_card_offer"] += 1
+                                    if phase == Phase.MAIN:
+                                        actions["main_multi_card_offer"] += 1
+                                    elif phase == Phase.TRADE_RESPONSE:
+                                        actions["multi_card_counteroffers"] += 1
+                            obs, reward, terminated, truncated, info = env.step(selected)
                             reward_sum += reward
                             decisions += 1
                             done = terminated or truncated
@@ -96,6 +128,8 @@ def evaluate_policy(
                                 "learner_decisions": decisions,
                                 "turns": env.game.turn,
                                 "victory_points": env.game.victory_points(seat),
+                                **{field: actions[field] for field in ACTION_FIELDS},
+                                **{field: actions[field] for field in PHASE_ACTION_FIELDS},
                             }
                         )
                     finally:

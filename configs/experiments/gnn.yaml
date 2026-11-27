@@ -1,4 +1,4 @@
-extends: ../base.yaml
+extends: evaluated_base.yaml
 name: gnn
 model:
   encoder: gnn

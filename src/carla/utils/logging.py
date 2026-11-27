@@ -30,11 +30,12 @@ class CsvJournal:
         if path.exists():
             with path.open(newline="", encoding="utf-8") as stream:
                 reader = csv.DictReader(stream)
-                if reader.fieldnames != self.fields:
-                    old = reader.fieldnames or []
-                    if old != [f for f in self.fields if f in old] or not old:
-                        raise ValueError(f"CSV schema mismatch: {path}")
-                    upgrade = True
+                previous_fields = reader.fieldnames
+                if not previous_fields or previous_fields != [
+                    field for field in self.fields if field in previous_fields
+                ]:
+                    raise ValueError(f"CSV schema mismatch: {path}")
+                upgrade = previous_fields != self.fields
                 rows = list(reader)
         if len(rows) < committed_rows:
             raise ValueError(f"missing committed CSV rows: {path}")
@@ -42,6 +43,9 @@ class CsvJournal:
             raise ValueError(f"malformed committed CSV rows: {path}")
         if len(rows) > committed_rows:
             backup = path.with_suffix(".csv.recovery.bak")
+            backup.write_bytes(path.read_bytes())
+        if upgrade:
+            backup = path.with_suffix(".csv.schema.bak")
             backup.write_bytes(path.read_bytes())
         if not path.exists() or len(rows) != committed_rows or upgrade:
             temporary = path.with_suffix(".csv.tmp")

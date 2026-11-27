@@ -10,6 +10,7 @@ state. Before each epoch the stored states are recomputed by running the current
 through every game in order, so they match the weights being trained.
 """
 
+import csv
 import logging
 import multiprocessing as mp
 from dataclasses import dataclass
@@ -183,10 +184,34 @@ def behaviour_clone(
     seed: int = 0,
 ) -> Path:
     """Clone the heuristic into `config.model`; writes `output/bc.pt` loadable by --init-from."""
+    if games <= 0 or epochs <= 0 or minibatch_size <= 0 or workers <= 0 or eval_boards < 0:
+        raise ValueError(
+            "games, epochs, minibatch size and workers must be positive; eval boards cannot be negative"
+        )
     output.mkdir(parents=True, exist_ok=True)
     device = torch.device(config.runtime.device)
     torch.manual_seed(seed)
     policy = build_policy(config.model).to(device)
+    evaluations = []
+
+    def evaluate(stage: str) -> None:
+        for opponent in ("random", "heuristic"):
+            result = evaluate_policy(
+                policy, config, opponent=opponent, boards=eval_boards, seed=seed + 10_000
+            )
+            evaluations.extend({"stage": stage, **record} for record in result.records)
+            log.info(
+                "%s vs %s: %d/%d wins (%.3f), mean VP %.2f",
+                stage,
+                opponent,
+                result.wins,
+                result.games,
+                result.win_rate,
+                result.mean_vp,
+            )
+
+    if eval_boards:
+        evaluate("before_bc")
     log.info("collecting %d expert games with %d workers", games, workers)
     data = collect_demonstrations(config, policy.cpu(), games, seed=seed, workers=workers)
     policy.to(device)
@@ -194,6 +219,7 @@ def behaviour_clone(
     optimizer = torch.optim.Adam(policy.parameters(), lr=learning_rate)
     actions = torch.as_tensor(data.actions)
     returns = torch.as_tensor(data.returns)
+    epoch_rows = []
     for epoch in range(1, epochs + 1):
         states = recompute_states(policy, data, device)
         policy.train()
@@ -230,28 +256,43 @@ def behaviour_clone(
             epoch,
             " | ".join(f"{k} {v / batches:.4f}" for k, v in totals.items()),
         )
+        epoch_rows.append(
+            {
+                "epoch": epoch,
+                "expert_decisions": len(data),
+                **{key: value / batches for key, value in totals.items()},
+            }
+        )
     path = output / "bc.pt"
     torch.save(
         {
             "config": to_dict(config),
             "policy": {k: v.cpu() for k, v in policy.state_dict().items()},
             "counters": {"updates": 0, "env_steps": 0},
-            "imitation": {"games": games, "decisions": len(data), "epochs": epochs},
+            "imitation": {
+                "games": games,
+                "decisions": len(data),
+                "epochs": epochs,
+                "seed": seed,
+                "eval_boards": eval_boards,
+                "learning_rate": learning_rate,
+                "minibatch_size": minibatch_size,
+                "workers": workers,
+            },
         },
         path,
     )
     log.info("saved %s", path)
+    with (output / "bc_metrics.csv").open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, list(epoch_rows[0]))
+        writer.writeheader()
+        writer.writerows(epoch_rows)
     if eval_boards:
-        for opponent in ("random", "heuristic"):
-            result = evaluate_policy(policy, config, opponent=opponent, boards=eval_boards)
-            log.info(
-                "behaviour clone vs %s: %d/%d wins (%.3f), mean VP %.2f",
-                opponent,
-                result.wins,
-                result.games,
-                result.win_rate,
-                result.mean_vp,
-            )
+        evaluate("after_bc")
+        with (output / "bc_evaluation_games.csv").open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(stream, list(evaluations[0]))
+            writer.writeheader()
+            writer.writerows(evaluations)
     return path
 
 

@@ -1,0 +1,13 @@
+# Shared validation for long experiment runs. Ten boards in all four seats give
+# 40 games per opponent at each point; final tests use separate seeds and more boards.
+extends: ../base.yaml
+name: evaluated_base
+eval:
+  every_env_steps: 1000000
+  boards: 10
+  opponents: [random, heuristic]
+  seed: 10000
+  deterministic: true
+  retain_checkpoints: false
+runtime:
+  checkpoint_every: 50

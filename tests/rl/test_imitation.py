@@ -1,3 +1,8 @@
+import csv
+import shutil
+import subprocess
+import sys
+
 import numpy as np
 import pytest
 import torch
@@ -84,6 +89,59 @@ def test_behaviour_clone_lowers_expert_nll_and_seeds_ppo(tmp_path):
     assert _nll(trained, data) < _nll(fresh, data) - 0.2
     agent = PolicyAgent(path)
     assert agent.config.model == MODEL
+    with (tmp_path / "bc_metrics.csv").open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    assert len(rows) == 6 and all(float(row["nll"]) >= 0 for row in rows)
+
+
+def test_bc_before_after_report_uses_paired_games(tmp_path):
+    config = ExperimentConfig(
+        engine=EngineConfig(max_turns=2),
+        model=ModelConfig(hidden_dim=16, mlp_layers=1),
+        opponents=OpponentPoolConfig(pool=(OpponentSpec(kind="random"),)),
+        runtime=RuntimeConfig(device="cpu"),
+    )
+    behaviour_clone(config, tmp_path / "bc", games=1, epochs=1, eval_boards=1)
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/analyze_bc.py",
+            str(tmp_path / "bc"),
+            "--output",
+            str(tmp_path / "report"),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "BC figures" in completed.stdout
+    assert (tmp_path / "report" / "bc_before_after.png").stat().st_size > 1000
+    with (tmp_path / "report" / "bc_summary.csv").open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    assert len(rows) == 4 and all(int(row["games"]) == 4 for row in rows)
+
+
+def test_old_bc_checkpoint_can_be_evaluated_without_claiming_a_before_result(tmp_path):
+    from scripts.analyze_bc import analyze_bc
+
+    config = ExperimentConfig(
+        engine=EngineConfig(max_turns=2),
+        model=ModelConfig(hidden_dim=16, mlp_layers=1),
+        opponents=OpponentPoolConfig(pool=(OpponentSpec(kind="random"),)),
+        runtime=RuntimeConfig(device="cpu"),
+    )
+    checkpoint = behaviour_clone(config, tmp_path / "old", games=1, epochs=1, eval_boards=0)
+    only_checkpoint = tmp_path / "only_checkpoint" / "bc.pt"
+    only_checkpoint.parent.mkdir()
+    shutil.copy2(checkpoint, only_checkpoint)
+    summaries = analyze_bc(only_checkpoint, tmp_path / "old_report", boards=1)
+    assert len(summaries) == 2
+    assert {row["stage"] for row in summaries} == {"after_bc"}
+    assert (tmp_path / "old_report" / "bc_before_after.pdf").stat().st_size > 1000
+    assert not (tmp_path / "old_report" / "bc_fit.png").exists()
+    assert "Before-BC performance cannot be recovered" in (
+        tmp_path / "old_report" / "bc_report.md"
+    ).read_text(encoding="utf-8")
 
 
 def _nll(policy, data) -> float:

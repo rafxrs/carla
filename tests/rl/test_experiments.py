@@ -10,11 +10,12 @@ import torch
 
 from carla.cli import main
 from carla.config import load_config, save_config
-from carla.eval.analysis import analyze_runs, load_run, read_csv
+from carla.eval.analysis import _make_figures, _write_report, analyze_runs, load_run, read_csv
 from carla.models.factory import build_policy
 from carla.rl.checkpoint import rng_state, save_checkpoint
 from carla.rl.evaluate import evaluate_policy, export_evaluation
 from carla.rl.experiments import run_sweep
+from carla.rl.metrics import ACTION_FIELDS, PHASE_ACTION_FIELDS
 from carla.rl.policy_tournament import run_policy_tournament
 from carla.rl.train import train
 from carla.utils.logging import CsvJournal
@@ -40,6 +41,80 @@ def weights(path):
     return torch.load(path, weights_only=False)["policy"]
 
 
+def test_long_experiment_configs_enable_validation():
+    for name in (
+        "mlp",
+        "gnn",
+        "full_trade",
+        "full_trade_own",
+        "full_trade_margin",
+        "full_trade_own_mixed",
+        "full_trade_own_heuristic",
+        "full_trade_production_heuristic",
+        "full_trade_production_push",
+        "full_trade_production_bc_kl",
+        "full_trade_production_bc_kl_strong",
+        "full_trade_league",
+    ):
+        cfg = load_config(Path("configs/experiments") / f"{name}.yaml")
+        assert cfg.eval.every_env_steps == 1_000_000
+        assert cfg.eval.opponents == ("random", "heuristic")
+        if name.startswith("full_trade"):
+            assert cfg.eval.boards == 25 and cfg.eval.retain_checkpoints
+        else:
+            assert cfg.eval.boards == 10 and not cfg.eval.retain_checkpoints
+    baseline = load_config("configs/experiments/ppo_mlp_baseline.yaml")
+    assert baseline.eval.every_env_steps == 20_000
+    assert baseline.runtime.checkpoint_every == 20
+
+
+def test_report_names_production_shaping_and_reference_kl(tmp_path):
+    config = load_config("configs/experiments/full_trade_production_bc_kl.yaml")
+    report_path = tmp_path / "report.md"
+    _write_report(
+        report_path,
+        [],
+        {"runs": 1, "warnings": []},
+        "validation",
+        [
+            {
+                "config": config,
+                "lineage_start": 3_000_000,
+                "metadata": {"sessions": [{"init_from": "parent.pt"}]},
+                "updates": [{"reference_kl": "0.2"}],
+            }
+        ],
+    )
+    report = report_path.read_text(encoding="utf-8")
+    assert "production weight 1" in report
+    assert "reference action-type KL penalty 0.05" in report
+    assert "checkpoint at 3,000,000 cumulative decisions" in report
+    assert "reference_kl.pdf" in report
+
+
+def test_reference_kl_report_figure_uses_recorded_coefficient(tmp_path):
+    config = load_config("configs/experiments/full_trade_production_bc_kl.yaml")
+    run = {
+        "config": config,
+        "lineage_start": 3_000_000,
+        "label": "KL",
+        "episodes": [],
+        "updates": [
+            {
+                "env_steps": "8",
+                "value_loss": "0.1",
+                "approx_kl": "0.01",
+                "entropy": "1",
+                "clip_fraction": "0.1",
+                "reference_kl": "0.2",
+            }
+        ],
+    }
+    _make_figures([run], [], tmp_path, 1)
+    assert (tmp_path / "reference_kl.png").stat().st_size > 1000
+    assert (tmp_path / "reference_kl.pdf").stat().st_size > 1000
+
+
 def test_csv_recovery_preserves_committed_rows_and_backs_up_tail(tmp_path):
     path = tmp_path / "metrics.csv"
     log = CsvJournal(path, ("update", "value"))
@@ -53,6 +128,27 @@ def test_csv_recovery_preserves_committed_rows_and_backs_up_tail(tmp_path):
     assert read_csv(path)[1]["value"] == "5"
     with pytest.raises(ValueError, match="missing committed"):
         CsvJournal(path, ("update", "value"), committed_rows=3)
+
+
+def test_csv_resume_adds_columns_without_changing_committed_values(tmp_path):
+    path = tmp_path / "evaluation_games.csv"
+    old = CsvJournal(path, ("board", "wins"))
+    old.write({"board": 0, "wins": 1})
+    old.write({"board": 1, "wins": 0})
+    upgraded = CsvJournal(path, ("board", "wins", "main_build_road"), committed_rows=1)
+    assert read_csv(path) == [{"board": "0", "wins": "1", "main_build_road": ""}]
+    assert len(read_csv(path.with_suffix(".csv.schema.bak"))) == 2
+    assert len(read_csv(path.with_suffix(".csv.recovery.bak"))) == 2
+    upgraded.write({"board": 2, "wins": 1, "main_build_road": 3})
+    assert read_csv(path)[1]["main_build_road"] == "3"
+    CsvJournal(path, ("board", "wins", "main_build_road"), committed_rows=2)
+    with pytest.raises(ValueError, match="schema mismatch"):
+        CsvJournal(path, ("wins", "board", "main_build_road"), committed_rows=2)
+    ordered = tmp_path / "ordered.csv"
+    earlier = CsvJournal(ordered, ("a", "c"))
+    earlier.write({"a": 1, "c": 3})
+    CsvJournal(ordered, ("a", "b", "c"), committed_rows=1)
+    assert read_csv(ordered) == [{"a": "1", "b": "", "c": "3"}]
 
 
 @pytest.mark.parametrize("deterministic", [True, False])
@@ -85,6 +181,20 @@ def test_evaluation_preserves_weights_rng_modes_and_board_pairing(deterministic,
         records = [r for r in first.records if r["board"] == board]
         assert {r["seat"] for r in records} == set(range(4))
         assert len({r["game_seed"] for r in records}) == 1
+    for record in first.records:
+        assert all(0 <= record[field] <= record["learner_decisions"] for field in ACTION_FIELDS)
+        assert all(
+            0 <= record[field] <= record["learner_decisions"] for field in PHASE_ACTION_FIELDS
+        )
+        assert record["action_multi_card_offer"] <= record["action_propose_trade"]
+        assert record["action_build_settlement"] == record["main_build_settlement"] + 2
+        assert (
+            record["action_build_road"]
+            == record["main_build_road"] + record["road_building_roads"] + 2
+        )
+        assert (
+            record["action_propose_trade"] == record["main_propose_trade"] + record["counteroffers"]
+        )
 
 
 def test_telemetry_and_evaluation_do_not_change_training(tmp_path):
@@ -110,6 +220,30 @@ def test_telemetry_and_evaluation_do_not_change_training(tmp_path):
     assert {int(r["env_steps"]) for r in games} == {0, 16, 32}
     assert all((evaluated / r["checkpoint"]).exists() for r in games)
     assert len(games) == 12
+
+
+def test_analysis_keeps_warm_starts_separate_from_scratch(tmp_path):
+    cfg = tiny_config(tmp_path / "scratch", evaluation=True, steps=8)
+    scratch = train(cfg)
+    warm = train(
+        replace(cfg, runtime=replace(cfg.runtime, output_dir=str(tmp_path / "warm"))),
+        init_from=scratch / "latest.pt",
+    )
+    analyze_runs([scratch, warm], tmp_path / "comparison")
+    rows = read_csv(tmp_path / "comparison" / "configuration_summary.csv")
+    assert len(rows) == 2
+    assert {row["label"].endswith("warm start)") for row in rows} == {False, True}
+    assert (
+        int(read_csv(tmp_path / "comparison" / "evaluation_points.csv")[-1]["global_env_steps"])
+        >= 8
+    )
+    assert json.loads((warm / "metadata.json").read_text())["lineage_start_env_steps"] == 8
+    assert (
+        torch.load(warm / "latest.pt", weights_only=False)["training_state"][
+            "lineage_start_env_steps"
+        ]
+        == 8
+    )
 
 
 def test_validation_without_retained_snapshots_keeps_resume_and_curves(tmp_path, monkeypatch):
@@ -148,6 +282,12 @@ def test_resume_preserves_episode_totals_and_reconciles_csvs(tmp_path):
     rows = read_csv(run / "updates.csv")
     journal = CsvJournal(run / "updates.csv", list(rows[0]), len(rows))
     journal.write(rows[-1])  # Simulate records written after the last durable checkpoint.
+    old_games = read_csv(run / "evaluation_games.csv")
+    old_fields = [field for field in old_games[0] if field not in PHASE_ACTION_FIELDS]
+    with (run / "evaluation_games.csv").open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, old_fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(old_games)
     resumed_cfg = replace(cfg, ppo=replace(cfg.ppo, total_env_steps=32))
     train(resumed_cfg, resume=run / "checkpoints" / "step_000000000016.pt")
     reference = train(
@@ -159,6 +299,10 @@ def test_resume_preserves_episode_totals_and_reconciles_csvs(tmp_path):
     assert read_csv(run / "episodes.csv") == read_csv(reference / "episodes.csv")
     assert len(read_csv(run / "updates.csv")) == 4
     assert (run / "updates.csv.recovery.bak").exists()
+    assert (run / "evaluation_games.csv.schema.bak").exists()
+    resumed_games = read_csv(run / "evaluation_games.csv")
+    assert all(row["main_decisions"] == "" for row in resumed_games if row["env_steps"] != "32")
+    assert all(row["main_decisions"] != "" for row in resumed_games if row["env_steps"] == "32")
     assert len(json.loads((run / "metadata.json").read_text())["sessions"]) == 2
     # Per-game results match; timing columns intentionally differ.
     keys = ("env_steps", "checkpoint", "board", "game_seed", "seat", "outcome")
@@ -278,8 +422,19 @@ def test_sweep_analysis_and_separate_test_exports(tmp_path):
     summaries = read_csv(tmp_path / "analysis" / "configuration_summary.csv")
     assert len(summaries) == 4 and all(int(r["training_seeds"]) == 1 for r in summaries)
     assert (tmp_path / "analysis" / "training_diagnostics.png").stat().st_size > 1000
+    assert (tmp_path / "analysis" / "evaluation_strategy_random_greedy.png").stat().st_size > 1000
+    assert "Win rate" in (tmp_path / "analysis" / "report.md").read_text(encoding="utf-8")
+    assert (
+        "main_build_road_per_100_main_decisions"
+        in read_csv(tmp_path / "analysis" / "evaluation_points.csv")[0]
+    )
+    assert (tmp_path / "analysis" / "training_diagnostics.pdf").stat().st_size > 1000
     test_report = analyze_runs([root], tmp_path / "test_analysis", split="test")
     assert test_report["runs"] == 4
+    assert all(
+        row["mean_win_rate_change"] == ""
+        for row in read_csv(tmp_path / "test_analysis" / "configuration_summary.csv")
+    )
     # Corrupt logs must be rejected instead of silently double-counting observations.
     rows = read_csv(paths[0] / "updates.csv")
     with (paths[0] / "updates.csv").open("a", newline="", encoding="utf-8") as stream:
