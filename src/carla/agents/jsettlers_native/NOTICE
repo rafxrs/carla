@@ -1,0 +1,21 @@
+Native translations derive from JSettlers 2.6.10, commit
+c5141056d8e3fff548817b3a1712eb66085e897b, https://github.com/jdmonin/JSettlers2.
+Copyright Robert S. Thomas, Jeremy D. Monin and other upstream contributors.
+GPL-3.0-or-later; the complete license is in COPYING in this directory.
+
+Source correspondence:
+  knowledge.py: SOCResourceSet and public resource-event accounting
+  opening.py: OpeningBuildStrategy
+  estimator.py, planning/jsettlers_eta.py: SOCBuildingSpeedEstimate
+  trackers.py: SOCPlayerTracker, SOCPossiblePiece/Road/Settlement/City
+  roads.py: SOCPlayer.calcLongestRoad2, SOCRobotDM.recalcLongestRoadETAAux
+  fast.py, planner.py, smart.py: SOCRobotDM
+  projection.py: SOCPlayerTracker.recalcWinGameETA
+  strategies.py: DiscardStrategy, MonopolyStrategy, SOCRobotDM,
+                 SOCRobotNegotiator.getOfferToBank
+  negotiation.py: SOCRobotNegotiator
+  agent.py: SOCRobotBrain decision orchestration and CARLA adaptations
+
+The Java JAR is an optional external reference, not a native-agent runtime
+dependency. The Python implementations adapt CARLA phases and negotiations;
+whole-policy equivalence is not claimed. See docs/benchmarks/jsettlers_port.md.

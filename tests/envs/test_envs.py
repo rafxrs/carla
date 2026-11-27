@@ -248,3 +248,38 @@ def test_observation_does_not_leak_hidden_cards():
     after = encoder.encode(game, observer)
     for key in ("tiles", "corners", "edges", "players", "hand", "dev_cards", "events"):
         np.testing.assert_array_equal(before[key], after[key])
+
+
+def test_catan_env_drives_the_full_opponent_lifecycle():
+    """Opponents observe their redacted events after every transition, finish once, and are
+    released by `close`, as `eval.runner.play_game` drives them."""
+    from carla.agents.random_agent import RandomAgent
+    from carla.engine.events import PRIVATE_KINDS
+
+    class Recording(RandomAgent):
+        def __init__(self):
+            super().__init__()
+            self.events, self.finished, self.closed = [], 0, 0
+
+        def observe(self, events, step):
+            self.events.extend(events)
+
+        def finish(self, result):
+            self.finished += 1
+
+        def close(self):
+            self.closed += 1
+
+    opponents = [Recording() for _ in range(3)]
+    env = CatanEnv(EngineConfig(max_turns=40), EnvConfig(learner_seat=0), opponents)
+    env.reset(seed=4)
+    done = False
+    while not done:
+        _, _, terminated, truncated, _ = env.step(env.action_space.sample())
+        done = terminated or truncated
+    env.close()
+    for seat, agent in zip((1, 2, 3), opponents, strict=True):
+        assert agent.events and agent.finished == 1 and agent.closed == 1
+        for event in agent.events:
+            if event.kind in PRIVATE_KINDS and seat not in (event.player, event.target):
+                assert event.value == -1

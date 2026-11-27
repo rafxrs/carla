@@ -1,0 +1,6 @@
+extends: catanatron_f.yaml
+name: jsettlers_fast_native
+engine:
+  allow_domestic_trade: true
+eval:
+  agents: [heuristic, jsettlers-fast-native, jsettlers-fast-native, jsettlers-fast-native]

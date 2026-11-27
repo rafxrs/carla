@@ -15,6 +15,7 @@ Offers are combinatorial: `legal_actions` lists the one-for-one ones (`A.ONE_FOR
 `legal_trade_offer` checks any other. Terms and answers are public events.
 """
 
+from collections.abc import Sequence
 from typing import Any
 
 from carla.engine import actions as A
@@ -48,7 +49,6 @@ from carla.engine.topology import (
     NUM_CORNERS,
     NUM_EDGES,
     NUM_TILES,
-    PORT_CORNERS,
     TILE_CORNERS,
 )
 
@@ -140,7 +140,7 @@ def trade_ratios(s: GameState, player: int) -> list[int]:
     ratios = [4] * NUM_RESOURCES
     owner = s.corner_owner
     generic = False
-    for kind, (a, b) in zip(s.board.port_types, PORT_CORNERS, strict=True):
+    for kind, (a, b) in zip(s.board.port_types, s.board.port_corners, strict=True):
         if owner[a] == player or owner[b] == player:
             if kind == GENERIC_PORT:
                 generic = True
@@ -207,24 +207,52 @@ def playable_dev_cards(s: GameState, player: int) -> list[int]:
     return counts
 
 
-def longest_road_length(s: GameState, player: int) -> int:
-    """Longest trail (no edge reused) in `player`'s roads, cut at opponent buildings."""
+def _road_component(s: GameState, player: int, edge: int) -> list[int]:
+    """`player`'s roads connected to `edge` without passing an opponent's building."""
+    owner, edge_owner = s.corner_owner, s.edge_owner
+    seen, stack = {edge}, [edge]
+    while stack:
+        for corner in EDGE_CORNERS[stack.pop()]:
+            if owner[corner] >= 0 and owner[corner] != player:
+                continue
+            for other, _ in CORNER_LINKS[corner]:
+                if edge_owner[other] == player and other not in seen:
+                    seen.add(other)
+                    stack.append(other)
+    return sorted(seen)
+
+
+def longest_road_length(s: GameState, player: int, edges: Sequence[int] | None = None) -> int:
+    """Longest trail (no edge reused) in `player`'s roads (or those of `edges`), cut at opponent
+    buildings. Officially the edge up to an opponent's building counts; Catanatron's rules
+    (`catanatron_rules`) may start at such a corner but never enter one."""
     edge_owner, owner = s.edge_owner, s.corner_owner
-    own = [e for e in range(NUM_EDGES) if edge_owner[e] == player]
+    pool = range(NUM_EDGES) if edges is None else edges
+    own = [e for e in pool if edge_owner[e] == player]
+    allowed = 0
+    for e in own:
+        allowed |= 1 << e
     if not own:
         return 0
     best = 0
+    blocked = s.config.catanatron_rules
+
+    def enemy(corner: int) -> bool:
+        return owner[corner] >= 0 and owner[corner] != player
 
     def walk(corner: int, used: int, length: int) -> None:
         nonlocal best
         if length > best:
             best = length
-        if length and owner[corner] >= 0 and owner[corner] != player:
+        if length and enemy(corner):
             return
         for edge, far in CORNER_LINKS[corner]:
-            if edge_owner[edge] == player and not (used >> edge) & 1:
+            if (allowed >> edge) & 1 and not (used >> edge) & 1:
+                if blocked and enemy(far):
+                    continue
                 walk(far, used | (1 << edge), length + 1)
 
+    # A trail may start at an opponent's corner (Catanatron's components include it).
     for corner in sorted({c for e in own for c in EDGE_CORNERS[e]}):
         walk(corner, 0, 0)
         if best == len(own):
@@ -425,7 +453,7 @@ def _produce(s: GameState, number: int, events: list[Event]) -> None:
         receivers = [q for q in _SEATS if gains[q][r]]
         if sum(gains[q][r] for q in receivers) > bank[r]:
             # Shortage: nobody is paid, unless a single player is owed this resource.
-            if len(receivers) == 1:
+            if len(receivers) == 1 and not s.config.catanatron_rules:
                 gains[receivers[0]][r] = bank[r]
             else:
                 for q in receivers:
@@ -441,6 +469,8 @@ def _produce(s: GameState, number: int, events: list[Event]) -> None:
 
 
 def _next_discarder(s: GameState) -> int:
+    if s.config.catanatron_rules:  # Seat order from seat 0.
+        return next((q for q in _SEATS if s.discards_pending[q]), -1)
     for i in _SEATS:
         q = (s.current_player + i) % NUM_PLAYERS
         if s.discards_pending[q]:
@@ -494,7 +524,16 @@ def _build_settlement(s, action, p, rng, outcome, events):
     s.settlements_left[p] -= 1
     events.append(Event(EventKind.SETTLEMENT_BUILT, p, location=c))
     cut = {s.edge_owner[e] for e in CORNER_EDGES[c]} - {-1, p}
-    if cut:
+    if cut and s.config.catanatron_rules:
+        # Catanatron recomputes only a road split in two, then awards the longest road.
+        owners = [s.edge_owner[e] for e in CORNER_EDGES[c]]
+        split = [q for q in cut if owners.count(q) == 2]
+        for q in split:
+            s.road_lengths[q] = longest_road_length(s, q)
+        if split:
+            lengths = s.road_lengths
+            _set_longest_road(s, max(_SEATS, key=lambda q: lengths[q]), events)
+    elif cut:
         for q in cut:
             s.road_lengths[q] = longest_road_length(s, q)
         _update_longest_road(s, events)
@@ -535,8 +574,18 @@ def _build_road(s, action, p, rng, outcome, events):
     s.edge_owner[e] = p
     s.roads_left[p] -= 1
     events.append(Event(EventKind.ROAD_BUILT, p, location=e))
-    s.road_lengths[p] = longest_road_length(s, p)
-    _update_longest_road(s, events)
+    if s.config.catanatron_rules:
+        # Catanatron keeps each length as a running maximum over the new road's component,
+        # and a road takes the card only by beating the holder's recorded length.
+        candidate = longest_road_length(s, p, _road_component(s, p, e))
+        s.road_lengths[p] = max(s.road_lengths[p], candidate)
+        holder = s.longest_road_owner
+        held = s.road_lengths[holder] if holder >= 0 else 0
+        if candidate >= LONGEST_ROAD_MIN and candidate > held:
+            _set_longest_road(s, p, events)
+    else:
+        s.road_lengths[p] = longest_road_length(s, p)
+        _update_longest_road(s, events)
     if phase == Phase.SETUP_ROAD:
         _advance_setup(s)
     elif phase == Phase.ROAD_BUILDING:
@@ -713,6 +762,13 @@ def _update_longest_road(s: GameState, events: list[Event]) -> None:
         return
     leaders = [q for q in _SEATS if lengths[q] == best]
     new = leaders[0] if best >= LONGEST_ROAD_MIN and len(leaders) == 1 else -1
+    if new != holder:
+        s.longest_road_owner = new
+        events.append(Event(EventKind.LONGEST_ROAD_CHANGED, new, target=holder))
+
+
+def _set_longest_road(s: GameState, new: int, events: list[Event]) -> None:
+    holder = s.longest_road_owner
     if new != holder:
         s.longest_road_owner = new
         events.append(Event(EventKind.LONGEST_ROAD_CHANGED, new, target=holder))

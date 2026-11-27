@@ -1,0 +1,4 @@
+extends: catanatron_f.yaml
+name: native_f
+eval:
+  agents: [heuristic, native-f, native-f, native-f]

@@ -14,6 +14,7 @@ from carla.engine.constants import (
 )
 from carla.engine.rng import Rng
 from carla.engine.topology import (
+    COAST_EDGES,
     CORNER_TILES,
     EDGE_CORNERS,
     NUM_CORNERS,
@@ -33,6 +34,8 @@ class Board:
     tile_resource: tuple[int, ...]
     tile_number: tuple[int, ...]
     port_types: tuple[int, ...]
+    port_corners: tuple[tuple[int, int], ...] = PORT_CORNERS
+    """Port endpoints; alternate classic frames support external referee layouts."""
     corner_port: tuple[int, ...] = field(init=False, repr=False, compare=False)
     """Port type reachable from each corner, or -1."""
     tiles_by_number: tuple[tuple[int, ...], ...] = field(init=False, repr=False, compare=False)
@@ -53,7 +56,17 @@ class Board:
             raise ValueError("the robber starts on a desert; the board needs one")
 
         corner_port = [-1] * NUM_CORNERS
-        for kind, corners in zip(self.port_types, PORT_CORNERS, strict=True):
+        if (
+            len(self.port_corners) != NUM_PORTS
+            or any(
+                len(pair) != 2
+                or tuple(sorted(pair)) not in tuple(EDGE_CORNERS[e] for e in COAST_EDGES)
+                for pair in self.port_corners
+            )
+            or len({c for pair in self.port_corners for c in pair}) != 18
+        ):
+            raise ValueError("ports require nine disjoint board edges")
+        for kind, corners in zip(self.port_types, self.port_corners, strict=True):
             for c in corners:
                 corner_port[c] = kind
         by_number: list[list[int]] = [[] for _ in range(13)]
@@ -89,16 +102,22 @@ class Board:
         return cls(tuple(terrain), tuple(numbers), tuple(ports))
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "tile_resource": list(self.tile_resource),
             "tile_number": list(self.tile_number),
             "port_types": list(self.port_types),
         }
+        if self.port_corners != PORT_CORNERS:
+            data["port_corners"] = [list(pair) for pair in self.port_corners]
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Board":
         return cls(
-            tuple(data["tile_resource"]), tuple(data["tile_number"]), tuple(data["port_types"])
+            tuple(data["tile_resource"]),
+            tuple(data["tile_number"]),
+            tuple(data["port_types"]),
+            tuple(tuple(pair) for pair in data.get("port_corners", PORT_CORNERS)),
         )
 
     def describe_tile(self, t: int) -> str:

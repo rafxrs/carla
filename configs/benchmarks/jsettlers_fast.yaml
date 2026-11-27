@@ -1,0 +1,4 @@
+extends: jsettlers_smart.yaml
+name: jsettlers_fast
+eval:
+  agents: [heuristic, jsettlers-fast-adapted, jsettlers-fast-adapted, jsettlers-fast-adapted]

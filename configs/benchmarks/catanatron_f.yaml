@@ -1,0 +1,11 @@
+extends: ../base.yaml
+name: catanatron_f
+engine:
+  allow_domestic_trade: false
+  max_turns: 300
+eval:
+  agents: [heuristic, catanatron-f, catanatron-f, catanatron-f]
+  num_games: 100
+  seeds: [55201, 55202, 55203]
+  rotate_seats: true
+  num_workers: 1

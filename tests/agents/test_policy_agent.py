@@ -44,6 +44,33 @@ def _assert_same(observed, expected, path="obs"):
         np.testing.assert_array_equal(observed, expected, err_msg=path)
 
 
+def test_recurrent_policy_uses_shared_tournament_runner(checkpoint):
+    from carla.rl.policy_tournament import run_policy_tournament
+
+    result = run_policy_tournament(
+        [str(checkpoint), "native-f", "heuristic", "heuristic"], boards=1, seed=552
+    )
+    assert len(result.records) == 16
+    assert result.entries[0].games == 4
+
+
+def test_trading_override_is_explicit_and_does_not_mutate_checkpoint(checkpoint):
+    from dataclasses import replace
+
+    from carla.engine.game import Game
+
+    game = Game(replace(ENGINE, allow_domestic_trade=False), seed=3)
+    with pytest.raises(ValueError, match="different engine rules"):
+        PolicyAgent(checkpoint).reset(game, 0, 3)
+    agent = PolicyAgent(checkpoint, allow_trading_override=True)
+    agent.reset(game, 0, 3)
+    assert agent.config.engine == ENGINE
+    assert agent.evaluation_overrides == {"allow_domestic_trade": (True, False)}
+    assert game.is_legal(agent.act(game, 0, game.legal_actions()))
+    with pytest.raises(ValueError, match="different engine rules"):
+        agent.reset(Game(replace(ENGINE, vp_to_win=5), seed=3), 0, 3)
+
+
 def test_policy_agent_sees_the_training_observations(checkpoint):
     env = CatanAECEnv(ENGINE)
     env.reset(3)
@@ -103,3 +130,39 @@ def test_cli_accepts_checkpoint_agents(checkpoint, tmp_path):
     assert _agent_names(f"heuristic,ppo:{checkpoint}") == ("heuristic", f"ppo:{checkpoint}")
     with pytest.raises(argparse.ArgumentTypeError, match="not found"):
         _agent_names(f"ppo:{tmp_path / 'missing.pt'}")
+
+
+def test_delivered_events_reproduce_the_shadow_replay(checkpoint):
+    """A referee that delivers events through `observe` gives the policy exactly the
+    observations its own history replay would (so history-free referees can host it)."""
+
+    def observations(deliver):
+        agent = PolicyAgent(checkpoint)
+        if not deliver:
+            agent.observe = lambda events, step: None
+        seen = []
+        original = agent.act
+
+        def act(game, seat, legal):
+            action = original(game, seat, legal)
+            seen.append(agent.last_observation)
+            return action
+
+        agent.act = act
+        play_game([agent, *[make_agent("heuristic") for _ in range(3)]], 21, ENGINE)
+        return seen
+
+    delivered, replayed = observations(True), observations(False)
+    assert len(delivered) == len(replayed) > 10
+    for a, b in zip(delivered, replayed, strict=True):
+        _assert_same(a, b)
+
+
+def test_referee_profile_knobs_are_overrides_not_rule_changes(checkpoint):
+    from dataclasses import replace
+
+    from carla.engine.game import Game
+
+    agent = PolicyAgent(checkpoint)
+    agent.reset(Game(replace(ENGINE, max_turns=None, catanatron_rules=True), 0), 0, 0)
+    assert set(agent.evaluation_overrides) == {"catanatron_rules"}

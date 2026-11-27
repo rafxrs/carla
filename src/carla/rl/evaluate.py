@@ -42,8 +42,10 @@ def evaluate_policy(
     deterministic: bool = True,
 ) -> PolicyEvaluation:
     """Each held-out board is played in all four seats; RNG and module modes are restored."""
-    if opponent not in ("random", "heuristic") or boards <= 0:
-        raise ValueError("evaluation needs random/heuristic opponents and positive boards")
+    from carla.agents.registry import is_agent_name
+
+    if not is_agent_name(opponent) or boards <= 0:
+        raise ValueError("evaluation needs a registered opponent agent and positive boards")
     if config.model.encoder not in ("mlp", "gnn"):
         raise ValueError("this evaluator supports MLP/GNN policies only")
     modes = [(module, module.training) for module in policy.modules()]

@@ -1,0 +1,4 @@
+extends: catanatron_f.yaml
+name: catanatron_ab2
+eval:
+  agents: [heuristic, catanatron-ab2, catanatron-ab2, catanatron-ab2]

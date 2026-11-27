@@ -18,6 +18,15 @@ class Agent(ABC):
 
     name: str = "agent"
 
+    def observe(self, events: Sequence, step: int) -> None:  # noqa: B027
+        """Visible events after one referee transition; no raw actions/private outcomes."""
+
+    def finish(self, result: object) -> None:  # noqa: B027
+        """Called after normal game completion, before cleanup."""
+
+    def close(self) -> None:  # noqa: B027
+        """Release resources; safe after partially failed reset or repeated calls."""
+
     def reset(self, game: Game, seat: int, seed: int) -> None:  # noqa: B027
         """Called once per game before the first decision."""
 

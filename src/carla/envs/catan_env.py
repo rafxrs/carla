@@ -162,6 +162,7 @@ class CatanEnv(gym.Env):
         self.action_space = _LegalActionSpace(self)
         self.learner = 0
         self._seat_agents: dict[int, Agent] = {}
+        self._finished = False
         self._potential = 0.0
 
     @property
@@ -178,6 +179,7 @@ class CatanEnv(gym.Env):
         self._seat_agents = dict(zip(others, self.opponents, strict=True))
         for p, agent in self._seat_agents.items():
             agent.reset(self.game, p, derive_seed(game_seed, "seat", p))
+        self._finished = False
         _, obs = self._play_opponents(0.0)
         self._potential = potential(self.game, self.learner, self.config)
         return obs, self._info()
@@ -186,6 +188,7 @@ class CatanEnv(gym.Env):
         if self.game.is_over or self.game.decision_player != self.learner:
             raise RuntimeError("the episode is over; call reset()")
         result = self.aec.step(action)
+        self._deliver(result.info["events"])
         reward, obs = self._play_opponents(float(result.rewards[self.learner]))
         if self.config.shaping != "none":
             # F = gamma * Phi(s') - Phi(s) between consecutive learner decisions; Phi = 0 at the end.
@@ -195,14 +198,39 @@ class CatanEnv(gym.Env):
         over, truncated = self.game.is_over, self.game.is_truncated
         return obs, reward, over and not truncated, truncated, self._info()
 
+    def _deliver(self, events) -> None:
+        """Agent lifecycle, as `eval.runner.play_game` drives it: each opponent observes its
+        redacted events after every transition, and `finish` once the game is over."""
+        step = self.game.num_steps
+        for seat, agent in self._seat_agents.items():
+            agent.observe(tuple(e.visible_to(seat) for e in events), step)
+        if self.game.is_over and not self._finished:
+            self._finished = True
+            for agent in self._seat_agents.values():
+                agent.finish({"winner": self.game.winner, "turns": self.game.turn})
+
     def _play_opponents(self, reward: float) -> tuple[float, dict]:
         """Let opponents act until the learner must decide or the game ends."""
         game = self.game
         while not game.is_over and game.decision_player != self.learner:
             seat = game.decision_player
             action = self._seat_agents[seat].act(game, seat, game.legal_actions())
-            reward += float(self.aec.step(action).rewards[self.learner])
+            result = self.aec.step(action)
+            self._deliver(result.info["events"])
+            reward += float(result.rewards[self.learner])
         return reward, self.aec.observe(self.learner)
+
+    def close(self) -> None:
+        """Release the opponents (e.g. external processes); every cleanup is attempted."""
+        errors = []
+        for agent in self.opponents:
+            try:
+                agent.close()
+            except Exception as error:
+                errors.append(error)
+        super().close()
+        if errors:
+            raise ExceptionGroup("opponent cleanup failed", errors)
 
     def _info(self) -> dict[str, Any]:
         over = self.game.is_over

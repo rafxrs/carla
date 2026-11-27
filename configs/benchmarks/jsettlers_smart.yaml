@@ -1,0 +1,6 @@
+extends: catanatron_f.yaml
+name: jsettlers_smart
+engine:
+  allow_domestic_trade: true
+eval:
+  agents: [heuristic, jsettlers-smart-adapted, jsettlers-smart-adapted, jsettlers-smart-adapted]

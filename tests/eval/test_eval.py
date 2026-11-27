@@ -52,3 +52,49 @@ def test_tournament_is_identical_in_parallel(tmp_path):
     saved = sorted(tmp_path.glob("*.json.gz"))
     assert len(saved) == 16
     assert GameRecord.load(saved[0]).replay().is_over
+
+
+def test_strength_parity_verdicts_on_synthetic_paired_games():
+    import importlib.util
+    import random
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / "scripts" / "run_strength_parity.py"
+    spec = importlib.util.spec_from_file_location("run_strength_parity", path)
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+
+    def rows(bot, wins, boards):
+        return [
+            {
+                "condition": f"{bot}|trading=0",
+                "board": b,
+                "seat": s,
+                "failure": None,
+                "heuristic_win": wins(b, s),
+                "truncated": False,
+                "heuristic_vp": 6,
+                "bot_vp": 10,
+                "seconds": 1.0,
+            }
+            for b in range(boards)
+            for s in range(4)
+        ]
+
+    rng = random.Random(3)
+    outcome = {(b, s): rng.random() < 0.3 for b in range(80) for s in range(4)}
+    same = rows("catanatron-f", lambda b, s: outcome[b, s], 80)
+    same += rows("native-f-upstream", lambda b, s: outcome[b, s], 80)
+    gap = rows("catanatron-ab2", lambda b, s: True, 80) + rows(
+        "native-ab2-upstream", lambda b, s: s == 0, 80
+    )
+    report = script.analyze(same + gap, 0.05)
+    assert report["pairs"]["catanatron-f|trading=0"]["verdict"] == "equivalent"
+    assert report["pairs"]["catanatron-ab2|trading=0"]["verdict"] == "different"
+    few = script.analyze(
+        rows("catanatron-f", lambda b, s: False, 5)
+        + rows("native-f-upstream", lambda b, s: False, 5),
+        0.05,
+    )
+    assert few["pairs"]["catanatron-f|trading=0"]["verdict"] == "insufficient boards"
+    assert script.mcnemar_exact(0, 0) == 1.0 and script.mcnemar_exact(10, 0) < 0.01

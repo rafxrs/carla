@@ -144,8 +144,8 @@ def test_masked_entropy_has_finite_gradients():
         ("model.belief=lstm", "belief must be none or gru"),
         ("model.encoder=mlp", None),
         ("model.trade_decoder=transformer", "transformer trade decoding"),
-        ("opponents.pool=[{kind: self}]", "random/heuristic with positive weight"),
-        ("opponents.pool=[{kind: random, weight: 0}]", "random/heuristic with positive weight"),
+        ("opponents.pool=[{kind: self}]", "with positive weight"),
+        ("opponents.pool=[{kind: random, weight: 0}]", "with positive weight"),
         ("ppo.total_env_steps=0", "budgets must be positive"),
         ("env.shaping=own", None),
     ],
@@ -167,3 +167,26 @@ def test_gnn_training_preserves_baseline_restrictions(override, message):
         config = load_config("configs/gnn_smoke.yaml", [override])
     with pytest.raises(ValueError, match=message):
         _validate(config)
+
+
+def test_opponent_tables_name_registry_agents_and_refuse_process_backed_bots():
+    from carla.config.schema import OpponentPoolConfig, OpponentSpec
+    from carla.rl.opponents import bot_tables
+
+    pool = OpponentPoolConfig(
+        (
+            OpponentSpec("agent", name="native-f"),
+            OpponentSpec("checkpoint", path="runs/x/latest.pt"),
+            OpponentSpec("heuristic"),
+        )
+    )
+    tables = bot_tables(pool, 1, 2)
+    assert {name for table in tables[0] for name in table} == {
+        "native-f",
+        "ppo:runs/x/latest.pt",
+        "heuristic",
+    }
+    for name in ("jsettlers-smart-adapted", "external", "no-such-bot"):
+        bad = OpponentPoolConfig((OpponentSpec("agent", name=name),))
+        with pytest.raises(ValueError, match=r"another process|unknown opponent"):
+            bot_tables(bad, 1, 1)

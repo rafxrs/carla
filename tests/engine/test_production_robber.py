@@ -138,3 +138,35 @@ def test_knight_before_roll_returns_to_pre_roll():
     game.step(game.legal_actions()[0])
     assert game.phase == Phase.PRE_ROLL
     assert game.legal_actions() == (A.ROLL,)
+
+
+def test_catanatron_rules_profile_changes_only_its_declared_rules():
+    from dataclasses import replace
+
+    from carla.engine import rules
+    from carla.engine.config import EngineConfig
+    from carla.engine.game import Game
+    from carla.engine.topology import TILE_CORNERS
+
+    official = EngineConfig()
+    assert "catanatron_rules" not in official.to_dict()  # Official records serialize as before.
+    assert replace(official, catanatron_rules=True).to_dict()["catanatron_rules"] is True
+
+    def produce(config):
+        game = Game(config, 3)
+        s = game.state
+        tile = next(t for t, n in enumerate(s.board.tile_number) if n == 8 and t != s.robber_tile)
+        corner = TILE_CORNERS[tile][0]
+        s.corner_owner[corner], s.corner_building[corner] = 1, 2  # a city owed 2
+        r = s.board.tile_resource[tile]
+        s.bank[r] = 1  # short by one, single claimant
+        rules._produce(s, 8, [])
+        return s.hands[1][r]
+
+    assert produce(official) == 1  # official: the single claimant takes what is left
+    assert produce(replace(official, catanatron_rules=True)) == 0  # Catanatron: nobody
+
+    for config, first in ((official, 2), (replace(official, catanatron_rules=True), 0)):
+        s = Game(config, 3).state
+        s.current_player, s.discards_pending = 1, [2, 0, 3, 0]
+        assert rules._next_discarder(s) == first

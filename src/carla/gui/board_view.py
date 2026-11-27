@@ -12,9 +12,9 @@ from math import sin, tau
 from carla.engine.board import Board
 from carla.engine.constants import DESERT, GENERIC_PORT, PIPS, Building, Resource
 from carla.engine.state import GameState
-from carla.engine.topology import NUM_CORNERS, NUM_EDGES, NUM_TILES, PORT_CORNERS
+from carla.engine.topology import EDGE_CORNERS, NUM_CORNERS, NUM_EDGES, NUM_TILES
 from carla.gui import theme
-from carla.gui.geometry import PORT_RADIUS, BoardTransform, Point, Rect
+from carla.gui.geometry import PORT_RADIUS, BoardTransform, Point, Rect, _port_positions
 from carla.gui.render import Layer, scaled
 from carla.gui.theme import Color
 
@@ -68,14 +68,16 @@ class BoardView:
 
     def _draw_static(self, layer: Layer, board: Board, sea: Rect) -> None:
         tr, s = self.transform, self.transform.scale
+        port_edges = tuple(EDGE_CORNERS.index(tuple(sorted(pair))) for pair in board.port_corners)
+        ports = tuple(tr.to_screen(*p) for p in _port_positions(port_edges))
         layer.rect(sea.x, sea.y, sea.w, sea.h, theme.SEA)
         for x, y in tr.tiles:
             layer.circle(x, y, 1.62 * s, theme.SHALLOWS)
         for x, y in tr.tiles:
             layer.circle(x, y, 1.1 * s, theme.BEACH)
         for slot in range(len(board.port_types)):
-            mx, my = tr.ports[slot]
-            for c in PORT_CORNERS[slot]:
+            mx, my = ports[slot]
+            for c in board.port_corners[slot]:
                 layer.line(mx, my, *tr.corners[c], max(2.0, 0.07 * s), theme.PIER, True)
         for t in range(NUM_TILES):
             terrain = board.tile_resource[t]
@@ -89,7 +91,7 @@ class BoardView:
             if board.tile_number[t]:
                 _token(layer, tr.tiles[t], board.tile_number[t], s)
         for slot, kind in enumerate(board.port_types):
-            _port(layer, tr.ports[slot], kind, s)
+            _port(layer, ports[slot], kind, s)
 
     # ------------------------------------------------------------------ dynamic part
 

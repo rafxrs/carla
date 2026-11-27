@@ -1,4 +1,6 @@
 # Uses the project's own black/ruff (activate the venv): `pre-commit install` once.
+# pre-commit passes file names explicitly, which bypasses pyproject's extend-exclude.
+exclude: ^src/carla/agents/catanatron/vendor/
 repos:
   - repo: local
     hooks:

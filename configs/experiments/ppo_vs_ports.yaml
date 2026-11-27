@@ -1,0 +1,18 @@
+# MLP PPO against the native benchmark ports, validated against ports and the heuristic bot.
+# Opponents are fixed per table in proportion to their weights (see rl/opponents.py): here one
+# native Catanatron value-function bot, one native JSettlers FAST robot and one heuristic bot.
+# Process-backed bots (jsettlers-*-adapted, external) cannot train in rollout workers; evaluate
+# against them, or against the originals on their own engines (docs/benchmarks/README.md).
+extends: ppo_mlp_baseline.yaml
+name: ppo_vs_ports
+opponents:
+  pool:
+    - kind: agent
+      name: native-f
+    - kind: agent
+      name: jsettlers-fast-native
+    - kind: heuristic
+eval:
+  every_env_steps: 20480
+  boards: 10
+  opponents: [heuristic, native-f, native-ab2, jsettlers-smart-native]

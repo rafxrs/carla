@@ -77,10 +77,14 @@ class PPOConfig:
 
 @dataclass(frozen=True)
 class OpponentSpec:
-    kind: Literal["self", "snapshot", "random", "heuristic", "checkpoint"]
+    kind: Literal["self", "snapshot", "random", "heuristic", "checkpoint", "agent"]
     weight: float = 1.0
     path: str | None = None
     """Checkpoint file for kind == "checkpoint"."""
+    name: str | None = None
+    """Agent registry name for kind == "agent", e.g. "native-f", "jsettlers-smart-native",
+    "catanatron-ab2" or "ppo:<checkpoint>". Process-backed agents (the Java-wrapped JSettlers
+    bots, external agents) cannot be training opponents: worker states are pickled."""
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,4 @@
+Json.java and OSPBoard.java are from OfficialLahusa/Lanzenbrecher aabaa1912bd971265109e3eab15f9a340878142a, Bridges/, GPL-3.0-or-later. JSettlers is an external GPL-3.0-or-later dependency; no JAR is distributed here.
+All remaining OSP Java files also come from the same GPL Bridges snapshot. CarlaAgent.java is CARLA-specific orchestration and component diagnostics using the original JAR. Json.java additionally writes finite floating-point diagnostic scores. OSPGame.java additionally exports the public victory-point target for native-agent capability validation.
+
+The unnecessary SeededOpening copy was removed after auditing JSettlers release 2.6.10 (commit c5141056d8e3fff548817b3a1712eb66085e897b). The original planInitRoad method contains no Math.random call. The robot DM's Math.random call is in the unsupported Pirate Islands ship scenario, not classic initial-road placement.

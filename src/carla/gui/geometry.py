@@ -118,10 +118,10 @@ def compute_layout(width: float, height: float) -> Layout:
     return Layout(width, height, board, status, playback, viewport, hand, side, log)
 
 
-def _port_positions() -> tuple[Point, ...]:
+def _port_positions(edges=PORT_EDGES) -> tuple[Point, ...]:
     tile_of = {e: t for t, edges in enumerate(TILE_EDGES) for e in edges}
     out = []
-    for e in PORT_EDGES:
+    for e in edges:
         (ex, ey), (tx, ty) = EDGE_XY[e], TILE_XY[tile_of[e]]
         n = hypot(ex - tx, ey - ty)
         out.append((ex + (ex - tx) / n * PORT_OFFSET, ey + (ey - ty) / n * PORT_OFFSET))

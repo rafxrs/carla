@@ -27,6 +27,12 @@ class EngineConfig:
     forbid_adjacent_red_numbers: bool = True
     """Lay number tokens as in the official variable set-up (no neighbouring 6/8, equal numbers or
     2/12); False shuffles them freely."""
+    catanatron_rules: bool = False
+    """Catanatron ecf9311's rule implementation instead of the official one, so a CARLA game can
+    mirror a game Catanatron referees (`agents.catanatron.host`): a short resource pays nobody
+    (no single-claimant exception); discards go in seat order from seat 0; after a settlement
+    splits a road, Longest Road goes to the longest road regardless of the 5-road minimum, and
+    the holder keeps it until a road of at least 5 beats its length."""
 
     def __post_init__(self) -> None:
         for name in _TRADE_LIMITS:
@@ -42,6 +48,8 @@ class EngineConfig:
         if not self.allow_domestic_trade:
             for name in _TRADE_LIMITS[1:]:
                 del out[name]
+        if not self.catanatron_rules:
+            del out["catanatron_rules"]  # Official rules serialize as before.
         return out
 
     @classmethod

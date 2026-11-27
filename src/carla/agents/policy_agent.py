@@ -19,6 +19,11 @@ from carla.models.base import PolicyNetwork, batch_observations
 from carla.models.factory import build_policy
 
 PREFIX = "ppo:"
+REFEREE_FIELDS = frozenset(
+    {"max_turns", "board_seed", "forbid_adjacent_red_numbers", "catanatron_rules"}
+)
+"""Engine knobs a checkpoint may meet unchanged-rules referees with: truncation, how boards
+are drawn, and a foreign referee's rule profile. They are recorded as overrides, not refused."""
 
 
 @functools.lru_cache(maxsize=8)
@@ -37,34 +42,66 @@ def load_checkpoint(path: str) -> tuple[ExperimentConfig, PolicyNetwork]:
 class PolicyAgent(Agent):
     """Plays like evaluation: greedy (or sampled) actions, belief state carried across decisions.
 
-    The engine only hands agents the game, so the agent replays new moves on a private copy to
-    recover the events its seat would have observed since its previous decision, exactly as
-    `CatanAECEnv` delivers them during training.
+    Events since the previous decision come from `observe` when the referee delivers them
+    (`eval.runner`, the Catanatron mirror, the OSP bridge to external servers). Otherwise the
+    agent replays new moves on a private copy to recover the events its seat would have
+    observed, exactly as `CatanAECEnv` delivers them during training.
     """
 
-    def __init__(self, checkpoint: str | Path, *, deterministic: bool = True) -> None:
+    def __init__(
+        self,
+        checkpoint: str | Path,
+        *,
+        deterministic: bool = True,
+        allow_trading_override: bool = False,
+    ) -> None:
         self.checkpoint = str(checkpoint)
         self.config, self.policy = load_checkpoint(self.checkpoint)
         self.encoder = ObservationEncoder(self.config.env.max_events)
         self.deterministic = deterministic
+        self.allow_trading_override = allow_trading_override
+        self.evaluation_overrides = {}
         self.name = PREFIX + self.checkpoint
         self._start: Game | None = None
         self._shadow: Game | None = None
         self._pending: list[Event] = []
         self._state: torch.Tensor | None = None
         self._rng = random.Random(0)
+        self._observed: list[Event] | None = None
+        """Events delivered through `observe` since the last decision (None: never observed)."""
         self.fallbacks = 0  # Decoded actions that were not legal (should stay 0).
         self.last_observation: dict | None = None
 
     def reset(self, game: Game, seat: int, seed: int) -> None:
-        if game.config != self.config.engine:
+        from dataclasses import asdict
+
+        changed = {
+            k: (v, asdict(game.config)[k])
+            for k, v in asdict(self.config.engine).items()
+            if v != asdict(game.config)[k]
+        }
+        trading_fields = {
+            "allow_domestic_trade",
+            "max_trade_proposals_per_turn",
+            "max_domestic_trades_per_turn",
+            "max_trade_cards_per_side",
+        }
+        rules = set(changed) - REFEREE_FIELDS
+        if rules and not (self.allow_trading_override and rules <= trading_fields):
             raise ValueError(
                 f"{self.checkpoint} was trained with different engine rules; "
                 "pass the experiment config it was trained with (--config)"
             )
+        self.evaluation_overrides = changed
+        self._observed = None
         self._start = Game(game.config, game.seed, game.board)  # The position before move 1.
         self._restart(game, seat)
         self._rng = random.Random(seed)
+
+    def observe(self, events: Sequence, step: int) -> None:
+        if self._observed is None:
+            self._observed = []
+        self._observed.extend(events)
 
     def _restart(self, game: Game, seat: int) -> None:
         """Replay the game so far on a fresh copy; the belief starts over (used after a seek)."""
@@ -86,11 +123,15 @@ class PolicyAgent(Agent):
         if self._shadow is None:
             self.reset(game, seat, 0)
         assert self._shadow is not None
-        known = self._shadow.history
-        if game.num_steps < len(known) or game.history[: len(known)] != known:
-            self._restart(game, seat)
+        if self._observed is not None:
+            # The referee delivers events (possibly without any CARLA history to replay).
+            self._pending, self._observed = self._observed, []
         else:
-            self._catch_up(game, seat)
+            known = self._shadow.history
+            if game.num_steps < len(known) or game.history[: len(known)] != known:
+                self._restart(game, seat)
+            else:
+                self._catch_up(game, seat)
         obs = self.last_observation = self.encoder.encode(game, seat, self._pending)
         self._pending = []
         batch = batch_observations([obs])

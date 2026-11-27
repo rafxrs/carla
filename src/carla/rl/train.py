@@ -79,12 +79,14 @@ def _validate(config: ExperimentConfig) -> None:
         raise ValueError("env.shaping_gamma must equal ppo.gamma for potential-based shaping")
     if config.eval.every_env_steps < 0 or config.eval.boards <= 0:
         raise ValueError("evaluation interval must be nonnegative and boards positive")
+    from carla.agents.registry import is_agent_name
+
     if (
         not config.eval.opponents
-        or any(name not in ("random", "heuristic") for name in config.eval.opponents)
+        or any(not is_agent_name(name) for name in config.eval.opponents)
         or len(set(config.eval.opponents)) != len(config.eval.opponents)
     ):
-        raise ValueError("evaluation opponents must be distinct random/heuristic bots")
+        raise ValueError("evaluation opponents must be distinct agent registry names")
 
 
 def _load_initial_weights(path: Path, policy, config: ExperimentConfig) -> None:

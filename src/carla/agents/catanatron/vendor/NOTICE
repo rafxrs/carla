@@ -1,0 +1,3 @@
+Adapted from OfficialLahusa/Lanzenbrecher Bridges at aabaa19. GPL-3.0-or-later. Original source: https://github.com/OfficialLahusa/Lanzenbrecher/tree/aabaa19/Bridges
+Only reconstruction and codecs are reused; no fallback policy is used. Relative imports and seat colors adjusted.
+CARLA changes: reconstruct exact CARLA port-node cache even when the coastal slots differ. Native deck RNG is replaced by the adapter after reconstruction. No upstream fallback agent is imported.

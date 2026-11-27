@@ -26,6 +26,7 @@ dependencies = [
 cpu = ["torch>=2.7"]
 cu130 = ["torch>=2.7"]
 gui = ["arcade>=3.0"]
+benchmarks = ["catanatron @ git+https://github.com/bcollazo/catanatron.git@ecf931181b9a65bb4116a2153fb78c16f1438e00"]
 dev = [
   "pytest>=8.0",
   "pytest-xdist>=3.5",
@@ -62,10 +63,12 @@ explicit = true
 
 # ---------------------------------------------------------------- tooling
 [tool.black]
+extend-exclude = 'src/carla/agents/catanatron/vendor/'
 line-length = 100
 target-version = ["py311"]
 
 [tool.ruff]
+extend-exclude = ["src/carla/agents/catanatron/vendor"]
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]

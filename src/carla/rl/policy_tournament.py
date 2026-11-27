@@ -7,15 +7,9 @@ from pathlib import Path
 import torch
 
 from carla.agents import make_agent
-from carla.config.loader import from_dict
 from carla.config.schema import ExperimentConfig
-from carla.engine.actions import ActionType
 from carla.engine.rng import derive_seed
-from carla.envs.action_space import decode_action
-from carla.envs.catan_env import CatanAECEnv
 from carla.eval.metrics import wilson_interval
-from carla.models.base import batch_observations
-from carla.models.factory import build_policy
 from carla.rl.checkpoint import isolated_rng
 
 TOURNAMENT_FIELDS = (
@@ -70,75 +64,59 @@ def run_policy_tournament(
     """
     if len(players) != 4 or boards <= 0:
         raise ValueError("tournament needs four players and a positive board count")
-    policies = {}
+    from carla.agents.policy_agent import PolicyAgent
+    from carla.agents.registry import is_agent_name
+    from carla.eval.runner import play_game
+
     config = None
-    for slot, player in enumerate(players):
-        if str(player) in ("random", "heuristic"):
-            continue
-        path = Path(player)
-        data = torch.load(path, map_location="cpu", weights_only=False)
-        if data.get("config") is None:
-            raise ValueError(f"checkpoint has no experiment config: {path}")
-        current = from_dict(ExperimentConfig, data["config"])
-        if current.model.encoder not in ("mlp", "gnn") or current.model.belief != "none":
-            raise ValueError("policy tournament supports feed-forward MLP/GNN checkpoints only")
-        if config is not None and (current.engine != config.engine or current.env != config.env):
-            raise ValueError("tournament checkpoints must use the same engine and environment")
-        config = current
-        policy = build_policy(current.model)
-        policy.load_state_dict(data["policy"])
-        policy.eval()
-        policies[slot] = policy
+    names = []
+    for player in players:
+        name = str(player)
+        if not is_agent_name(name):
+            name = "ppo:" + name
+        names.append(name)
+        if name.startswith("ppo:"):
+            agent = PolicyAgent(name[4:], deterministic=deterministic)
+            current = agent.config
+            if config is not None and (
+                current.engine != config.engine or current.env != config.env
+            ):
+                raise ValueError("tournament checkpoints must use the same engine and environment")
+            config = current
     if config is None:
-        raise ValueError("tournament needs at least one checkpoint")
+        from carla.engine.config import EngineConfig
+
+        config = ExperimentConfig(engine=EngineConfig(max_turns=500))
     records = []
     with isolated_rng(seed):
         for board in range(boards):
             game_seed = derive_seed(seed, "evaluation-board", board)
             for rotation in range(4):
-                env = CatanAECEnv(config.engine, config.env)
-                env.reset(game_seed)
                 seats = [(slot - rotation) % 4 for slot in range(4)]
-                slots = {seat: slot for slot, seat in enumerate(seats)}
-                bots = {}
-                for slot, player in enumerate(players):
-                    if slot not in policies:
-                        bot = make_agent(str(player))
-                        bot.reset(
-                            env.game, seats[slot], derive_seed(game_seed, "seat", seats[slot])
-                        )
-                        bots[slot] = bot
-                rewards, decisions = [0.0] * 4, [0] * 4
-                trade_offers, multi_card_offers = [0] * 4, [0] * 4
-                while not env.game.is_over:
-                    seat = env.actor
-                    slot = slots[seat]
-                    if slot in policies:
-                        obs = env.observe(seat)
-                        batch = batch_observations([obs])
-                        action = (
-                            policies[slot](batch)
-                            .distribution(batch["masks"])
-                            .sample(deterministic=deterministic)[0]
-                            .cpu()
-                            .numpy()
-                        )
-                    else:
-                        env.observe(seat)  # Clear events for this bot seat.
-                        action = bots[slot].act(env.game, seat, env.game.legal_actions())
-                    parsed = action if slot not in policies else decode_action(action, seat)
-                    if parsed.type == ActionType.PROPOSE_TRADE:
-                        assert parsed.trade is not None
-                        trade_offers[slot] += 1
-                        if max(sum(parsed.trade.give), sum(parsed.trade.receive)) > 1:
-                            multi_card_offers[slot] += 1
-                    result = env.step(action)
-                    for player_slot, player_seat in enumerate(seats):
-                        rewards[player_slot] += float(result.rewards[player_seat])
-                    decisions[slot] += 1
-                winner = env.game.winner
+                agents = [None] * 4
+                for slot, name in enumerate(names):
+                    agent = make_agent(name)
+                    if isinstance(agent, PolicyAgent):
+                        agent.deterministic = deterministic
+                    agents[seats[slot]] = agent
+                result = play_game(agents, game_seed, config.engine)
                 for slot, player in enumerate(players):
                     seat = seats[slot]
+                    outcome = (
+                        "truncated"
+                        if result.winner is None
+                        else "win" if result.winner == seat else "loss"
+                    )
+                    reward = (
+                        config.env.truncation_reward
+                        if result.winner is None
+                        else (
+                            config.env.win_reward
+                            if result.winner == seat
+                            else config.env.loss_reward
+                        )
+                    )
+                    reward += config.env.vp_reward * result.public_victory_points[seat]
                     records.append(
                         {
                             "board": board,
@@ -147,18 +125,14 @@ def run_policy_tournament(
                             "slot": slot,
                             "player": str(player),
                             "seat": seat,
-                            "outcome": (
-                                "truncated"
-                                if env.game.is_truncated
-                                else ("win" if winner == seat else "loss")
-                            ),
-                            "winner": -1 if winner is None else winner,
-                            "return": rewards[slot],
-                            "decisions": decisions[slot],
-                            "turns": env.game.turn,
-                            "victory_points": env.game.victory_points(seat),
-                            "trade_offers": trade_offers[slot],
-                            "multi_card_offers": multi_card_offers[slot],
+                            "outcome": outcome,
+                            "winner": -1 if result.winner is None else result.winner,
+                            "return": reward,
+                            "decisions": result.decisions[seat],
+                            "turns": result.turns,
+                            "victory_points": result.victory_points[seat],
+                            "trade_offers": result.trade_offers[seat],
+                            "multi_card_offers": result.multi_card_offers[seat],
                         }
                     )
     entries = []
