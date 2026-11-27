@@ -59,3 +59,12 @@ def test_smart_revalidates_committed_roads_during_multi_robot_trading():
     )
     assert result.winner is not None
     assert sum(result.trade_offers[1:]) > 0
+
+
+def test_bank_trade_the_bank_cannot_pay_ends_the_turn():
+    # Regression: JSettlers' bank is unlimited, so FAST asked for wheat -> ore with no ore left
+    # in CARLA's bank, and the referee aborted the game.
+    agents = [JSettlersAgent("fast") for _ in range(3)]
+    agents.insert(3, HeuristicAgent())
+    result = play_game(agents, 7370695838722492483, EngineConfig(max_turns=300))
+    assert result.turns > 76

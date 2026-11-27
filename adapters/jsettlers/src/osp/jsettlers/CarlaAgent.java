@@ -679,6 +679,16 @@ public final class CarlaAgent {
     throw new IllegalStateException("unsupported robot command: " + message);
   }
 
+  static boolean bankTradeLegal(Map<String, Object> trade, List<Object> legal) {
+    for (Object value : legal) {
+      Map<String, Object> a = obj(value);
+      if ("MARITIME_TRADE".equals(a.get("type"))
+          && n(a.get("resource")) == n(trade.get("resource"))
+          && n(a.get("resource2")) == n(trade.get("resource2"))) return true;
+    }
+    return false;
+  }
+
   Map<String, Object> decide(Map<String, Object> view) {
     Map<String, Object> s = obj(view.get("state"));
     synchronize(s);
@@ -784,7 +794,13 @@ public final class CarlaAgent {
       if (phase == 2) brain.roll();
       else brain.main();
     } catch (Selected selected) {
-      return selected(selected.message);
+      Map<String, Object> a = selected(selected.message);
+      // JSettlers' bank is unlimited; CARLA's holds 19 of each. A trade the bank cannot pay is
+      // skipped, and since getOfferToBank only trades for an unaffordable plan, the turn ends,
+      // as in the native port's boundary policy.
+      if (selected.message instanceof SOCBankTrade && !bankTradeLegal(a, legal))
+        return action("END_TURN");
+      return a;
     }
     throw new IllegalStateException(
         "robot emitted no command phase="
