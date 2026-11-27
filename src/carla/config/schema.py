@@ -20,14 +20,16 @@ class EnvConfig:
     truncation_reward: float = 0.0
     vp_reward: float = 0.0
     """Shaping: reward per public victory point gained (0 disables)."""
-    shaping: Literal["none", "own", "margin", "strategic"] = "none"
+    shaping: Literal["none", "own", "margin", "strategic", "strategic_v2"] = "none"
     """Potential-based shaping in `CatanEnv`: F = gamma * Phi(s') - Phi(s) between consecutive
     learner decisions, with Phi = 0 once the game is over, so the optimal policy is unchanged.
     own: Phi = shaping_coef * own VP (own hidden VP cards included); margin: Phi = shaping_coef *
     (own VP - the top opponent's public VP). strategic: Phi = shaping_coef * (learner utility -
     0.35 * public opponent threat), combining VP, production, build readiness (own hand only),
     and award progress. Opponent threat uses public VP, production, and award progress with
-    public-VP softmax weights; no hidden opponent cards or learned beliefs are used."""
+    public-VP softmax weights; no hidden opponent cards or learned beliefs are used.
+    strategic_v2 uses production diversity and resource conservation in the learner utility,
+    and includes awards through victory points."""
     shaping_coef: float = 0.1
     shaping_gamma: float = 0.999
     """Discount used by the shaping; must equal `ppo.gamma` to keep the optimal policy."""
@@ -49,6 +51,20 @@ class EnvConfig:
     award_army_weight: float = 0.50
     production_normalization: float = 2.0
     opponent_softmax_temperature: float = 2.0
+    v2_vp_weight: float = 0.50
+    v2_production_weight: float = 0.35
+    v2_readiness_weight: float = 0.10
+    v2_resource_conservation_weight: float = 0.05
+    v2_production_quantity_weight: float = 0.70
+    v2_production_diversity_weight: float = 0.30
+    v2_resource_coverage_threshold: float = 3 / 36
+    v2_resource_reserve_normalization: float = 7.0
+    v2_opponent_vp_weight: float = 2 / 3
+    v2_opponent_production_weight: float = 1 / 3
+    v2_readiness_road_weight: float = 0.10
+    v2_readiness_settlement_weight: float = 0.40
+    v2_readiness_city_weight: float = 0.40
+    v2_readiness_dev_weight: float = 0.10
 
     def __post_init__(self) -> None:
         for names in (
@@ -66,6 +82,20 @@ class EnvConfig:
             ),
             ("opponent_vp_weight", "opponent_production_weight", "opponent_award_weight"),
             ("award_road_weight", "award_army_weight"),
+            (
+                "v2_vp_weight",
+                "v2_production_weight",
+                "v2_readiness_weight",
+                "v2_resource_conservation_weight",
+            ),
+            ("v2_production_quantity_weight", "v2_production_diversity_weight"),
+            ("v2_opponent_vp_weight", "v2_opponent_production_weight"),
+            (
+                "v2_readiness_road_weight",
+                "v2_readiness_settlement_weight",
+                "v2_readiness_city_weight",
+                "v2_readiness_dev_weight",
+            ),
         ):
             values = [getattr(self, name) for name in names]
             if any(not math.isfinite(value) or value < 0 for value in values):
@@ -74,7 +104,16 @@ class EnvConfig:
                 raise ValueError(f"{names}: weights must sum to one")
         if not math.isfinite(self.opponent_threat_coef) or self.opponent_threat_coef < 0:
             raise ValueError("opponent_threat_coef must be finite and nonnegative")
-        for name in ("production_normalization", "opponent_softmax_temperature"):
+        if self.shaping == "strategic_v2" and (
+            not math.isfinite(self.shaping_coef) or self.shaping_coef < 0
+        ):
+            raise ValueError("shaping_coef must be finite and nonnegative")
+        for name in (
+            "production_normalization",
+            "opponent_softmax_temperature",
+            "v2_resource_coverage_threshold",
+            "v2_resource_reserve_normalization",
+        ):
             if not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be finite and positive")
 

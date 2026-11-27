@@ -1,6 +1,7 @@
 """Reward functions (per step, per seat)."""
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -61,6 +62,16 @@ def _purchase_readiness(hand: Sequence[int], cost: Sequence[int], available: boo
 
 
 def build_readiness(state: GameState, seat: int, config: EnvConfig = _DEFAULT_CONFIG) -> float:
+    road, settlement, city, dev = build_readiness_components(state, seat)
+    return (
+        config.readiness_road_weight * road
+        + config.readiness_settlement_weight * settlement
+        + config.readiness_city_weight * city
+        + config.readiness_dev_weight * dev
+    )
+
+
+def build_readiness_components(state: GameState, seat: int) -> tuple[float, float, float, float]:
     """Readiness from this seat's known hand and cost-independent normal-play geometry.
 
     Call only for the learner. Opponent hands must never enter the strategic potential.
@@ -79,12 +90,7 @@ def build_readiness(state: GameState, seat: int, config: EnvConfig = _DEFAULT_CO
         hand, CITY_COST, state.cities_left[seat] > 0 and bool(city_corners(state, seat))
     )
     dev = _purchase_readiness(hand, DEV_CARD_COST, sum(state.dev_deck) > 0)
-    return (
-        config.readiness_road_weight * road
-        + config.readiness_settlement_weight * settlement
-        + config.readiness_city_weight * city
-        + config.readiness_dev_weight * dev
-    )
+    return road, settlement, city, dev
 
 
 def road_progress(state: GameState, seat: int) -> float:
@@ -175,12 +181,101 @@ def strategic_potential(game: Game, seat: int, config: EnvConfig) -> float:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class StrategicV2Components:
+    victory: float
+    production_quantity: float
+    production_diversity: float
+    production: float
+    road_readiness: float
+    settlement_readiness: float
+    city_readiness: float
+    dev_readiness: float
+    readiness: float
+    resource_conservation: float
+    learner_utility: float
+    opponent_strengths: tuple[float, ...]
+    opponent_weights: tuple[float, ...]
+    opponent_threat: float
+    potential: float
+
+
+def production_diversity(capacity: Sequence[float], threshold: float) -> float:
+    return sum(min(resource / threshold, 1.0) for resource in capacity) / NUM_RESOURCES
+
+
+def resource_conservation(hand: Sequence[int], normalization: float) -> float:
+    cards = sum(hand)
+    return cards / (cards + normalization)
+
+
+def strategic_v2_components(game: Game, seat: int, config: EnvConfig) -> StrategicV2Components:
+    """Evaluate ESP-V2 once. Opponent tuples follow seat order, excluding the learner."""
+    state = game.state
+    victory = min(victory_points(state, seat, include_hidden=True) / 10.0, 1.0)
+    quantity = production_strength(state, seat, config)
+    diversity = production_diversity(
+        expected_production(state, seat, robber=False), config.v2_resource_coverage_threshold
+    )
+    production = (
+        config.v2_production_quantity_weight * quantity
+        + config.v2_production_diversity_weight * diversity
+    )
+    road, settlement, city, dev = build_readiness_components(state, seat)
+    readiness = (
+        config.v2_readiness_road_weight * road
+        + config.v2_readiness_settlement_weight * settlement
+        + config.v2_readiness_city_weight * city
+        + config.v2_readiness_dev_weight * dev
+    )
+    reserve = resource_conservation(state.hands[seat], config.v2_resource_reserve_normalization)
+    utility = (
+        config.v2_vp_weight * victory
+        + config.v2_production_weight * production
+        + config.v2_readiness_weight * readiness
+        + config.v2_resource_conservation_weight * reserve
+    )
+    strengths = tuple(
+        config.v2_opponent_vp_weight
+        * min(victory_points(state, opponent, include_hidden=False) / 10.0, 1.0)
+        + config.v2_opponent_production_weight * production_strength(state, opponent, config)
+        for opponent in range(NUM_PLAYERS)
+        if opponent != seat
+    )
+    weights = tuple(opponent_weights(state, seat, config).tolist())
+    threat = sum(weight * strength for weight, strength in zip(weights, strengths, strict=True))
+    phi = (
+        0.0
+        if game.is_over
+        else config.shaping_coef * (utility - config.opponent_threat_coef * threat)
+    )
+    return StrategicV2Components(
+        victory=victory,
+        production_quantity=quantity,
+        production_diversity=diversity,
+        production=production,
+        road_readiness=road,
+        settlement_readiness=settlement,
+        city_readiness=city,
+        dev_readiness=dev,
+        readiness=readiness,
+        resource_conservation=reserve,
+        learner_utility=utility,
+        opponent_strengths=strengths,
+        opponent_weights=weights,
+        opponent_threat=threat,
+        potential=phi,
+    )
+
+
 def potential(game: Game, seat: int, config: EnvConfig) -> float:
     """Shaping potential of `seat` (see `EnvConfig.shaping`); 0 when disabled or game over."""
     if config.shaping == "none" or game.is_over:
         return 0.0
     if config.shaping == "strategic":
         return strategic_potential(game, seat, config)
+    if config.shaping == "strategic_v2":
+        return strategic_v2_components(game, seat, config).potential
     own = game.victory_points(seat, include_hidden=True)
     if config.shaping == "margin":
         own -= max(

@@ -1,0 +1,29 @@
+# ESP-V2 continuation from the lambda=2.5 checkpoint at 400,384 decisions.
+# Pass the source checkpoint with --init-from to start with fresh optimizer and counters.
+extends: full_trade_strategic_economy_05.yaml
+name: full_trade_strategic_economy_v2
+seed: 1
+env:
+  shaping: strategic_v2
+  shaping_coef: 2.5
+ppo:
+  total_env_steps: 500000
+  trade_entropy_coef: 0.001
+opponents:
+  pool:
+    - kind: heuristic75
+      weight: 2.0
+    - kind: heuristic
+      weight: 1.0
+eval:
+  every_env_steps: 100000
+  boards: 50
+  opponents: [heuristic]
+  retain_checkpoints: true
+runtime:
+  num_workers: 1
+  envs_per_worker: 4
+  device: cuda
+  output_dir: runs
+  checkpoint_every: 50
+  collect_training_diagnostics: true
