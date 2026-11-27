@@ -1,6 +1,6 @@
 # CARLA - Catan Advanced Reinforcement Learning Agent
 
-CARLA is a four-player Settlers of Catan reinforcement-learning project built on its own deterministic rules engine. Synchronous PPO trains MLP and GNN policies against bots or a league of the current policy, its snapshots and fixed checkpoints; the full model adds set attention, a GRU belief over opponents' cards, and a GRU decoder for multi-card trade offers.
+CARLA is a four-player Settlers of Catan reinforcement-learning project built on its own deterministic rules engine. Synchronous PPO trains MLP and GNN policies against bots or a league of the current policy, its snapshots and fixed checkpoints; the full model adds set attention, a GRU belief over opponents' cards, and a GRU decoder for multi-card trade offers. AlphaCat ([docs/alphacat.md](docs/alphacat.md)) adds an AlphaStar-style paradigm: an LSTM-core strategy network conditioned on a strategy statistic z, styled heuristic teachers, strategy selection, and a league with main agents and exploiters.
 
 ## Status
 
@@ -9,10 +9,10 @@ CARLA is a four-player Settlers of Catan reinforcement-learning project built on
 | `engine/` | engine     | Base rules, maritime trade, and domestic proposals, invitations, counteroffers, confirmation, configurable limits, snapshots, deterministic replay, and logs. Larger offers are validated when submitted. |
 | `config/` | shared     | Typed dataclasses, YAML `extends`, dotted overrides, strict validation.                                                                                                                                                                                                                                 |
 | `envs/`   | RL         | Factored action heads and masks, canonical multi-card offer tokens, public trade context, rewards and potential-based shaping (own VP, VP margin, production), self-play env, Gymnasium env with opponent seats the caller can play (`ExternalAgent`). |
-| `agents/` | eval/bots  | Random and heuristic bots, including domestic proposals and counteroffers when enabled. Trained checkpoints play as `ppo:<path>` agents in tournaments and the GUI. |
-| `eval/`   | eval/bots  | Seeded tournaments with seat rotation and Wilson CIs, multi-process. Trade metrics, experiment CSV summaries, and learning/diagnostic plots. |
-| `models/` | models     | MLP and board GNN policies, masked action heads, set attention, a GRU belief over opponents' hidden cards, and an optional GRU decoder for multi-card domestic offers. |
-| `rl/`     | RL         | Synchronous MLP/GNN PPO with batched CPU rollout workers, resumable CSV logging/checkpoints, fixed-bot validation, gamma/lambda sweeps, and checkpoint tournaments. Behaviour cloning of the heuristic bot as a warm start, a KL pull toward a reference policy, gradient accumulation, and league opponents (current policy, snapshots, checkpoints, bots). The semi-asynchronous worker remains a TODO. |
+| `agents/` | eval/bots  | Random and heuristic bots, including domestic proposals and counteroffers when enabled; city, expansion and development-card teachers with coherent plans and card reservation (`heuristic_city`, `heuristic_expansion`, `heuristic_devcard`). Trained checkpoints play as `ppo:<path>[@variant]` (greedy) or `ppo-sampled:<path>` agents in tournaments and the GUI. |
+| `eval/`   | eval/bots  | Seeded tournaments with seat rotation and Wilson CIs, multi-process. Trade metrics, experiment CSV summaries, and learning/diagnostic plots. Behaviour profiles (what each agent builds) and robustness matrices (one agent against several tables, worst-case win rate). |
+| `models/` | models     | MLP and board GNN policies, masked action heads, set attention, a GRU belief over opponents' hidden cards, and an optional GRU decoder for multi-card domestic offers. The strategy network: board GNN, seat transformer, LSTM core, z-conditioned pointer heads, a strategy selector and a privileged training critic. |
+| `rl/`     | RL         | Synchronous MLP/GNN PPO with batched CPU rollout workers, resumable CSV logging/checkpoints, fixed-bot validation, gamma/lambda sweeps, and checkpoint tournaments. Behaviour cloning of the heuristic bot as a warm start, a KL pull toward a reference policy, gradient accumulation, and league opponents (current policy, snapshots, checkpoints, bots). Sequence BPTT, UPGO, strategy pseudo-rewards with their own critic, strategy-conditioned behaviour cloning, and an AlphaStar-style league (main agents, main exploiters, league exploiters, PFSP over four-player tables). The semi-asynchronous worker remains a TODO. |
 | `gui/`    | GUI        | Arcade play, watch, and replay modes. Click resource cards to build a trade, then send it to the bank or the other players; offers, answers and counteroffers show their cards. Player trading is on unless `--no-trading`. |
 
 The domestic trade protocol, defaults, and extension points are documented in
@@ -21,7 +21,9 @@ The domestic trade protocol, defaults, and extension points are documented in
 For Gymnasium clients that check decoder action shapes, use `TradeActionWrapper` as shown there.
 
 Training metrics, periodic validation, gamma/lambda/rollout sweeps, and analysis commands are
-documented in [docs/experiments.md](docs/experiments.md).
+documented in [docs/experiments.md](docs/experiments.md). The AlphaStar-inspired paradigm
+(strategy statistic, teachers, selection, league, exploiters) is documented in
+[docs/alphacat.md](docs/alphacat.md).
 
 ## Setup
 
@@ -57,6 +59,12 @@ carla gui --play                   # needs the gui extra; play against 3 bots wi
 carla gui --play --no-trading                     # bank and port trades only
 carla gui --watch --opponents heuristic,random    # a live bot game with play/pause/step/seek
 carla gui runs/games/game_0000.json.gz            # replay a record
+carla strategy-bc configs/experiments/alphacat.yaml --output runs/alphacat/bc --games 2000 --epochs 16 --workers 11
+carla league configs/experiments/alphacat_league.yaml   # AlphaCat league; --resume <run dir>
+carla league-report runs/alphacat/league/<run>
+carla robustness ppo-sampled:<checkpoint>@select --boards 25 --workers 11
+carla profile heuristic_city heuristic_expansion heuristic_devcard heuristic --games 50
+python scripts/alphacat_pipeline.py                     # BC, league and final evaluation, resumable
 python scripts/benchmark_engine.py
 sbatch --array=0-2 scripts/slurm/train.sbatch configs/experiments/ppo_mlp_baseline.yaml
 ```

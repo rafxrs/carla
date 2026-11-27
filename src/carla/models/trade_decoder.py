@@ -80,6 +80,7 @@ class TradeDecoder(nn.Module):
             (len(context), self.max_tokens), PAD, dtype=torch.long, device=context.device
         )
         entropy_sum = context.new_zeros(len(context))
+        self.last_sample_logp = context.new_zeros(len(context))
         active = torch.ones(len(context), dtype=torch.bool, device=context.device)
         for step in range(self.max_tokens):
             mask = self._mask(hand, limit, give, receive, stage, last)
@@ -92,6 +93,9 @@ class TradeDecoder(nn.Module):
             token = logp.argmax(1) if deterministic else torch.multinomial(logp.exp(), 1).squeeze(1)
             tokens[:, step] = torch.where(active, token, PAD)
             entropy_sum = entropy_sum + torch.where(active, entropy, 0.0)
+            self.last_sample_logp = self.last_sample_logp + torch.where(
+                active, logp.gather(1, token[:, None]).squeeze(1), 0.0
+            )
             give, receive, stage, last = self._advance(token, give, receive, stage, last)
             active = active & (token != STOP)
             previous = token

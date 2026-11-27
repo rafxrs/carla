@@ -29,6 +29,7 @@ from carla.engine.text import describe_state
 from carla.envs.action_space import HEAD_NAMES, HEAD_SIZES, decode_action, encode_action
 from carla.envs.observation import ObservationEncoder
 from carla.envs.rewards import potential, public_victory_points, step_rewards
+from carla.envs.strategy import StrategyController, StrategyStats, track_step
 
 
 @dataclass
@@ -58,9 +59,21 @@ class CatanAECEnv:
     ) -> None:
         self.engine_config = engine_config or EngineConfig()
         self.config = env_config or EnvConfig()
-        self.encoder = encoder or ObservationEncoder(self.config.max_events)
+        self.encoder = encoder or ObservationEncoder(
+            self.config.max_events, self.config.strategic_features
+        )
         self._game: Game | None = None
         self._pending: list[list[Event]] = [[] for _ in range(NUM_PLAYERS)]
+        self.stats: list[StrategyStats] = [StrategyStats() for _ in range(NUM_PLAYERS)]
+        """Public build statistics of every seat (`carla.envs.strategy`)."""
+        self.last_action_types: list[int] = [-1] * NUM_PLAYERS
+
+    def __setstate__(self, state: dict) -> None:
+        # Envs pickled in checkpoints from before strategy statistics existed: start them
+        # empty (they only feed planning features and diagnostics, unused by older models).
+        self.__dict__.update(state)
+        self.__dict__.setdefault("stats", [StrategyStats() for _ in range(NUM_PLAYERS)])
+        self.__dict__.setdefault("last_action_types", [-1] * NUM_PLAYERS)
 
     @property
     def game(self) -> Game:
@@ -76,13 +89,23 @@ class CatanAECEnv:
         """Start a new game; returns the first actor."""
         self._game = Game(self.engine_config, seed)
         self._pending = [[] for _ in range(NUM_PLAYERS)]
+        self.stats = [StrategyStats() for _ in range(NUM_PLAYERS)]
+        self.last_action_types = [-1] * NUM_PLAYERS
         return self.actor
 
     def observe(self, seat: int | None = None) -> dict:
         """Observation of `seat` (default: the actor). Consumes that seat's pending events."""
         seat = self.actor if seat is None else seat
         events, self._pending[seat] = self._pending[seat], []
-        return self.encoder.encode(self.game, seat, events)
+        if not self.config.strategic_features:
+            return self.encoder.encode(self.game, seat, events)
+        return self.encoder.encode(
+            self.game,
+            seat,
+            events,
+            stats=self.stats,
+            last_action_type=self.last_action_types[seat],
+        )
 
     def step(self, action: Action | Sequence[int] | np.ndarray) -> AECStep:
         """Apply an engine Action or policy indices, including offer tokens, for the actor."""
@@ -90,7 +113,10 @@ class CatanAECEnv:
         if not isinstance(action, Action):
             action = decode_action(action, game.decision_player)
         vp_before = public_victory_points(game) if self.config.vp_reward else None
+        phase, actor = game.phase, game.decision_player
         events = game.step(action)
+        track_step(self.stats, events, phase)
+        self.last_action_types[actor] = int(action.type)
         for seat in range(NUM_PLAYERS):
             self._pending[seat].extend(e.visible_to(seat) for e in events)
         rewards = step_rewards(vp_before, game, self.config)
@@ -119,10 +145,18 @@ class ExternalAgent(Agent):
     that plays it and `state` holds that network's recurrent state for this seat.
     """
 
-    def __init__(self, name: str, key: str) -> None:
+    variant: str | None = None  # Class defaults for agents pickled before these existed.
+    strategy: "StrategyController | None" = None
+
+    def __init__(self, name: str, key: str, variant: str | None = None) -> None:
         self.name = name
         self.key = key
         self.state: np.ndarray | None = None
+        self.variant = variant
+        """Strategy variant of a strategy-conditioned network ("select", "none", an archetype),
+        or None to let the caller choose."""
+        self.strategy: StrategyController | None = None
+        """This seat's strategy for the episode (set by the caller)."""
 
     def reset(self, game: Game, seat: int, seed: int) -> None:
         self.state = None
@@ -177,6 +211,7 @@ class CatanEnv(gym.Env):
     """
 
     metadata = {"render_modes": ["ansi"]}  # noqa: RUF012 (gymnasium API)
+    strategy: StrategyController | None = None  # Class default for envs pickled before it.
 
     def __init__(
         self,
@@ -198,6 +233,9 @@ class CatanEnv(gym.Env):
         self.learner = 0
         self._seat_agents: dict[int, Agent] = {}
         self._potential = 0.0
+        self.strategy: StrategyController | None = None
+        """The learner's strategy for the episode (set by the caller before or at reset);
+        with one, `info["strategy_reward"]` holds the strategy pseudo-reward of each step."""
 
     @property
     def game(self) -> Game:
@@ -239,7 +277,10 @@ class CatanEnv(gym.Env):
             reward += self.config.shaping_gamma * next_potential - self._potential
             self._potential = next_potential
         over, truncated = self.game.is_over, self.game.is_truncated
-        return obs, reward, over and not truncated, truncated, self._info()
+        info = self._info()
+        if self.strategy is not None:
+            info["strategy_reward"] = self.strategy.reward(self.game, self.aec.stats[self.learner])
+        return obs, reward, over and not truncated, truncated, info
 
     def _play_opponents(self, reward: float) -> Generator[int, Any, tuple[float, dict]]:
         """Let opponents act until the learner must decide or the game ends."""

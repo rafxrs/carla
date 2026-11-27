@@ -57,9 +57,66 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("overrides", nargs="*", help="dotted overrides, e.g. runtime.device=cuda")
 
+    p = commands.add_parser(
+        "strategy-bc",
+        help="strategy-conditioned behaviour cloning of the styled heuristic teachers",
+    )
+    p.add_argument("config", type=Path, help="experiment config (model, env, strategy)")
+    p.add_argument(
+        "--output", type=Path, required=True, help="directory for bc.pt and the z library"
+    )
+    p.add_argument("--games", type=int, default=900, help="teacher games (balanced over styles)")
+    p.add_argument("--epochs", type=int, default=8)
+    p.add_argument("--learning-rate", type=float, default=3e-4)
+    p.add_argument("--minibatch-size", type=int, default=1024)
+    p.add_argument("--workers", type=int, default=1, help="processes playing teacher games")
+    p.add_argument("--eval-boards", type=int, default=5, help="boards per z variant; 0 skips")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("overrides", nargs="*", help="dotted overrides, e.g. runtime.device=cuda")
+
+    p = commands.add_parser("league", help="AlphaStar-style league training (main, exploiters)")
+    p.add_argument("config", type=Path)
+    p.add_argument("--resume", type=Path, help="league run directory to resume")
+    p.add_argument("overrides", nargs="*", help="dotted overrides")
+
+    p = commands.add_parser("profile", help="behaviour profile: what each agent builds")
+    p.add_argument("agents", nargs=4, help="four agents (bots or ppo:<checkpoint>[@variant])")
+    p.add_argument("--games", type=int, default=25, help="boards, each in four rotations")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--config", type=Path, help="experiment config providing engine rules")
+    p.add_argument("--csv", type=Path)
+
+    p = commands.add_parser(
+        "robustness", help="one agent against several opponent tables (worst-case win rate)"
+    )
+    p.add_argument("subject", help="a bot or ppo:<checkpoint>[@variant]")
+    p.add_argument(
+        "--table",
+        action="append",
+        help="three comma-separated opponents (repeatable; default: heuristic and teacher tables)",
+    )
+    p.add_argument("--boards", type=int, default=10, help="boards per table, each in 4 rotations")
+    p.add_argument("--seed", type=int, default=30_000)
+    p.add_argument("--workers", type=int, default=1)
+    p.add_argument("--config", type=Path, help="experiment config providing engine rules")
+    p.add_argument("--csv", type=Path, help="per-game records")
+    p.add_argument("--json", type=Path, help="summary")
+
+    p = commands.add_parser("league-report", help="summarize a league run")
+    p.add_argument("run", type=Path, help="league run directory")
+
     p = commands.add_parser("evaluate", help="evaluate a checkpoint with seat rotation")
     p.add_argument("checkpoint", type=Path)
-    p.add_argument("--opponent", choices=("random", "heuristic"), default="heuristic")
+    p.add_argument(
+        "--opponent",
+        default="heuristic",
+        help="a bot for every seat, or a comma-separated table of three bots",
+    )
+    p.add_argument(
+        "--strategy",
+        help="strategy-conditioned policies: select, none or an archetype (default: select "
+        "with a selector, else none)",
+    )
     p.add_argument("--boards", type=int, default=10, help="held-out boards, each played in 4 seats")
     p.add_argument("--seed", type=int, default=10_000)
 
@@ -128,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
     # Accept only KEY=VALUE tokens there; retain normal errors for unknown options.
     args, extra = parser.parse_known_args(argv)
     if extra:
-        if args.command in ("train", "bc") and all(
+        if args.command in ("train", "bc", "strategy-bc", "league") and all(
             "=" in item and not item.startswith("-") for item in extra
         ):
             args.overrides.extend(extra)
@@ -141,6 +198,11 @@ def main(argv: list[str] | None = None) -> int:
         "tournament": _tournament,
         "train": _train,
         "bc": _bc,
+        "strategy-bc": _strategy_bc,
+        "league": _league,
+        "profile": _profile,
+        "robustness": _robustness,
+        "league-report": _league_report,
         "evaluate": _evaluate,
         "policy-tournament": _policy_tournament,
         "config": _config,
@@ -248,6 +310,97 @@ def _bc(args) -> int:
     return 0
 
 
+def _strategy_bc(args) -> int:
+    from carla.rl.strategy_imitation import strategy_behaviour_clone
+
+    strategy_behaviour_clone(
+        load_config(args.config, args.overrides),
+        args.output,
+        games=args.games,
+        epochs=args.epochs,
+        learning_rate=args.learning_rate,
+        minibatch_size=args.minibatch_size,
+        workers=args.workers,
+        eval_boards=args.eval_boards,
+        seed=args.seed,
+    )
+    return 0
+
+
+def _league(args) -> int:
+    from carla.rl.league.trainer import train_league
+
+    train_league(load_config(args.config, args.overrides), resume=args.resume)
+    return 0
+
+
+def _profile(args) -> int:
+    import csv
+
+    from carla.agents import make_agent
+    from carla.engine import EngineConfig
+    from carla.eval.behaviour import behaviour_profile, format_profiles
+
+    engine = load_config(args.config).engine if args.config else EngineConfig()
+    rows = behaviour_profile(
+        [lambda name=name: make_agent(name) for name in args.agents],
+        args.games,
+        args.seed,
+        engine,
+    )
+    print(format_profiles(rows))
+    if args.csv:
+        args.csv.parent.mkdir(parents=True, exist_ok=True)
+        with args.csv.open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(stream, list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+    return 0
+
+
+def _robustness(args) -> int:
+    import json
+
+    from carla.engine import EngineConfig
+    from carla.eval.robustness import DEFAULT_TABLES, format_matrix, robustness_matrix
+
+    if args.config:
+        engine = load_config(args.config).engine
+    elif args.subject.startswith(("ppo:", "ppo-sampled:")):
+        from carla.agents.policy_agent import load_checkpoint, split_variant
+
+        engine = load_checkpoint(split_variant(args.subject.split(":", 1)[1])[0])[0].engine
+    else:
+        engine = EngineConfig()
+    tables = DEFAULT_TABLES
+    if args.table:
+        tables = [tuple(part.strip() for part in t.split(",")) for t in args.table]
+        if any(len(t) != 3 for t in tables):
+            print("carla robustness: each --table needs three opponents", file=sys.stderr)
+            return 2
+    result = robustness_matrix(
+        args.subject,
+        tables,
+        boards=args.boards,
+        seed=args.seed,
+        engine=engine,
+        workers=args.workers,
+        csv_path=args.csv,
+    )
+    print(format_matrix(result))
+    if args.json:
+        args.json.parent.mkdir(parents=True, exist_ok=True)
+        args.json.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    return 0
+
+
+def _league_report(args) -> int:
+    from carla.rl.league.report import league_report
+
+    print(league_report(args.run))
+    return 0
+
+
 def _evaluate(args) -> int:
     from carla.rl.evaluate import evaluate_checkpoint
 
@@ -257,6 +410,7 @@ def _evaluate(args) -> int:
         boards=args.boards,
         seed=args.seed,
         deterministic=not args.sampled,
+        strategy=args.strategy,
     )
     if args.csv is not None:
         from carla.rl.evaluate import export_evaluation
@@ -306,7 +460,14 @@ def _agent_names(text: str) -> tuple[str, ...]:
     if not names or unknown:
         known = [*sorted(AGENTS), "ppo:<checkpoint.pt>"]
         raise argparse.ArgumentTypeError(f"unknown agents {unknown}; known: {known}")
-    missing = [n for n in names if n.startswith("ppo:") and not Path(n[4:]).is_file()]
+    from carla.agents.policy_agent import split_variant
+
+    missing = [
+        n
+        for n in names
+        if n.startswith(("ppo:", "ppo-sampled:"))
+        and not Path(split_variant(n.split(":", 1)[1])[0]).is_file()
+    ]
     if missing:
         raise argparse.ArgumentTypeError(f"checkpoint not found: {missing}")
     return names

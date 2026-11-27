@@ -1,0 +1,5 @@
+# Ablation: no UPGO term.
+extends: alphacat.yaml
+name: alphacat_no_upgo
+ppo:
+  upgo_coef: 0.0

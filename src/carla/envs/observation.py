@@ -24,6 +24,13 @@ from carla.engine.rules import playable_dev_cards, trade_ratios, victory_points
 from carla.engine.state import Phase
 from carla.engine.topology import NUM_CORNERS, NUM_EDGES, NUM_TILES
 from carla.envs.action_space import MASK_SHAPES, build_masks
+from carla.envs.strategy_features import (
+    CORNER_STRATEGY_FEATURES,
+    EDGE_STRATEGY_FEATURES,
+    OWN_STRATEGY_FEATURES,
+    SEAT_STRATEGY_FEATURES,
+    StrategyFeatureEncoder,
+)
 
 TILE_FEATURES = 8  # terrain one-hot (5 resources + desert), dice probability, robber
 CORNER_FEATURES = 14  # settlement/city of each relative seat (8), port type (6)
@@ -59,10 +66,13 @@ class ObservationEncoder:
     counteroffers by relative seat,
     events (max_events, EVENT_FEATURES) + event_mask: public events since the observer's last
     decision (input of the belief module), masks: see `carla.envs.action_space`.
+    With `strategic`, the planning arrays of `carla.envs.strategy_features` are added.
     """
 
-    def __init__(self, max_events: int = 64) -> None:
+    def __init__(self, max_events: int = 64, strategic: bool = False) -> None:
         self.max_events = max_events
+        self.strategic = strategic
+        self._strategy = StrategyFeatureEncoder() if strategic else None
         self._static_board = None
         self._static: tuple[np.ndarray, np.ndarray] | None = None
 
@@ -70,8 +80,19 @@ class ObservationEncoder:
         def box(*shape: int) -> spaces.Box:
             return spaces.Box(-np.inf, np.inf, shape=shape, dtype=np.float32)
 
+        strategic = (
+            {
+                "corner_strategy": box(NUM_CORNERS, CORNER_STRATEGY_FEATURES),
+                "edge_strategy": box(NUM_EDGES, EDGE_STRATEGY_FEATURES),
+                "seat_strategy": box(NUM_PLAYERS, SEAT_STRATEGY_FEATURES),
+                "own_strategy": box(OWN_STRATEGY_FEATURES),
+            }
+            if self.strategic
+            else {}
+        )
         return spaces.Dict(
             {
+                **strategic,
                 "tiles": box(NUM_TILES, TILE_FEATURES),
                 "corners": box(NUM_CORNERS, CORNER_FEATURES),
                 "edges": box(NUM_EDGES, EDGE_FEATURES),
@@ -90,8 +111,19 @@ class ObservationEncoder:
             }
         )
 
-    def encode(self, game: Game, observer: int, events: Sequence[Event] = ()) -> dict:
-        """Observation of `observer`; `events` must already be redacted for that seat."""
+    def encode(
+        self,
+        game: Game,
+        observer: int,
+        events: Sequence[Event] = (),
+        *,
+        stats=None,
+        last_action_type: int = -1,
+    ) -> dict:
+        """Observation of `observer`; `events` must already be redacted for that seat.
+
+        `stats` (every seat's `StrategyStats`) and `last_action_type` feed the planning
+        features of a `strategic` encoder; they are public or the observer's own."""
         s = game.state
         rel = [(p - observer) % NUM_PLAYERS for p in range(NUM_PLAYERS)]
         tiles, port_features = self._board_features(game)
@@ -192,7 +224,15 @@ class ObservationEncoder:
             if observer == game.decision_player
             else {k: np.zeros(shape, dtype=bool) for k, shape in MASK_SHAPES.items()}
         )
+        extra = {}
+        if self._strategy is not None:
+            if stats is None:
+                from carla.envs.strategy import StrategyStats
+
+                stats = [StrategyStats() for _ in range(NUM_PLAYERS)]
+            extra = self._strategy.encode(game, observer, stats, last_action_type)
         return {
+            **extra,
             "tiles": tiles,
             "corners": corners,
             "edges": edges,

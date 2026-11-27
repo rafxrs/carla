@@ -144,7 +144,15 @@ class TradeDistribution(FactoredDistribution):
             )
         self._conditional_entropy = conditional
         self._entropy_ready = True
-        return torch.cat((heads, tokens), dim=1)
+        actions = torch.cat((heads, tokens), dim=1)
+        # Remember the sampled offers' log-probabilities: scoring them again is redundant.
+        token_logp = self.context.new_zeros(self.batch)
+        if selected.any():
+            token_logp = token_logp.index_copy(
+                0, selected.nonzero(as_tuple=True)[0], self.decoder.last_sample_logp
+            )
+        self._sampled = (actions, token_logp)
+        return actions
 
     def log_prob(self, actions: Tensor) -> Tensor:
         if actions.shape != (self.batch, len(HEAD_NAMES) + self.decoder.max_tokens):
@@ -152,6 +160,9 @@ class TradeDistribution(FactoredDistribution):
         heads = actions[:, : len(HEAD_NAMES)]
         selected = heads[:, 0] == _T.PROPOSE_TRADE
         total = super().log_prob(heads, include_trade=False)
+        cached = getattr(self, "_sampled", None)
+        if cached is not None and cached[0] is actions:
+            return total + cached[1]
         if selected.any():
             # Add the exact sequence probability; the one-for-one subhead is unused.
             token_logp, token_entropy = self.decoder.score(

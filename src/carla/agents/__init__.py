@@ -3,6 +3,16 @@
 from carla.agents.base import Agent
 from carla.agents.heuristic import HeuristicAgent
 from carla.agents.random_agent import RandomAgent
-from carla.agents.registry import AGENTS, is_agent_name, make_agent
+from carla.agents.registry import AGENTS, TEACHERS, is_agent_name, make_agent
+from carla.agents.strategic import StrategicHeuristic
 
-__all__ = ["AGENTS", "Agent", "HeuristicAgent", "RandomAgent", "is_agent_name", "make_agent"]
+__all__ = [
+    "AGENTS",
+    "TEACHERS",
+    "Agent",
+    "HeuristicAgent",
+    "RandomAgent",
+    "StrategicHeuristic",
+    "is_agent_name",
+    "make_agent",
+]

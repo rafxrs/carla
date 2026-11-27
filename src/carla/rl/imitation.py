@@ -56,7 +56,14 @@ class Demonstrations:
 
 def expert_action(action, actor: int, width: int, max_cards: int | None) -> np.ndarray:
     """The policy-format action (heads, then offer tokens if the model has a decoder)."""
-    heads = encode_action(action, actor)
+    multi_card = action.type == ActionType.PROPOSE_TRADE and (
+        action.trade is None or sum(action.trade.give) != 1 or sum(action.trade.receive) != 1
+    )
+    if multi_card and width > len(HEAD_NAMES):
+        heads = np.full(len(HEAD_NAMES), -1, dtype=np.int64)
+        heads[0] = ActionType.PROPOSE_TRADE
+    else:
+        heads = encode_action(action, actor)
     if width == len(HEAD_NAMES):
         return heads
     tokens = np.full(width - len(HEAD_NAMES), PAD, dtype=np.int64)

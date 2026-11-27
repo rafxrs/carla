@@ -1,0 +1,5 @@
+# Ablation: strategies always prescribed from the library (no learned selection in training).
+extends: alphacat.yaml
+name: alphacat_prescribed
+strategy:
+  selection: prescribed

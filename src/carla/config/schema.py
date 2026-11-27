@@ -34,11 +34,17 @@ class EnvConfig:
     """Discount used by the shaping; must equal `ppo.gamma` to keep the optimal policy."""
     max_events: int = 64
     """Event-stream slots per observation (belief module input); older events are dropped."""
+    strategic_features: bool = False
+    """Add the planning features of `carla.envs.strategy_features` (production per seat and
+    resource, build affordability and deficits, reachable sites, public build statistics, the
+    observer's previous action type). Public information and the observer's own cards only."""
 
 
 @dataclass(frozen=True)
 class ModelConfig:
-    encoder: Literal["mlp", "gnn"] = "mlp"
+    encoder: Literal["mlp", "gnn", "strategy"] = "mlp"
+    """"strategy": the AlphaStar-style network of `carla.models.strategy_net` (board GNN, seat
+    transformer, recurrent core, strategy-conditioned pointer heads)."""
     hidden_dim: int = 256
     mlp_layers: int = 3
     gnn_layers: int = 4
@@ -53,6 +59,23 @@ class ModelConfig:
     trade_decoder: Literal["none", "gru", "transformer"] = "none"
     max_trade_cards_per_side: int = 4
     """Decoder cap; the engine's offer limit can further restrict it."""
+    core: Literal["none", "lstm"] = "none"
+    """Recurrent core over the encoded observation (encoder=strategy)."""
+    core_dim: int = 256
+    core_layers: int = 1
+    strategy_conditioning: bool = False
+    """Condition heads, trade decoder and values on the strategy statistic z (encoder=strategy)."""
+    strategy_dim: int = 64
+    """Width of the z embedding."""
+    strategy_selector: bool = False
+    """Add a head that chooses a strategy archetype (or none) from the core output."""
+    num_strategies: int = 3
+    """Archetypes the selector chooses among (plus one "no strategy" option)."""
+    privileged_value: bool = False
+    """Feed the opponents' hidden cards to the value heads only (training-time critic). The
+    policy logits never read them."""
+    seat_attention_layers: int = 2
+    """Self-attention layers over the four seats (encoder=strategy)."""
 
 
 @dataclass(frozen=True)
@@ -86,12 +109,32 @@ class PPOConfig:
     max_policy_lag: int = 1
     """Semi-asynchronous PPO: accept rollouts from policies at most this many updates old."""
     sequence_length: int = 32
-    """Truncated BPTT window for recurrent (belief) models."""
+    """Truncated BPTT window for recurrent models when `bptt` is "sequence"."""
+    bptt: Literal["step", "sequence"] = "step"
+    """step: recompute each decision from its stored state (truncated BPTT of one decision).
+    sequence: unroll chunks of `sequence_length` decisions from the stored state at the chunk
+    start, resetting the state at episode boundaries (needed for a recurrent core)."""
+    strategy_value_coef: float = 0.5
+    """Weight of the strategy value head's loss (strategy pseudo-reward critic)."""
+    upgo_coef: float = 0.0
+    """Weight of the upgoing policy update (UPGO, AlphaStar) on the outcome stream."""
+    reference_kl_heads: Literal["type", "all"] = "type"
+    """KL toward the reference over the action type only, or over every head the taken action
+    uses (AlphaStar's distillation over all arguments)."""
 
 
 @dataclass(frozen=True)
 class OpponentSpec:
-    kind: Literal["self", "snapshot", "random", "heuristic", "checkpoint"]
+    kind: Literal[
+        "self",
+        "snapshot",
+        "random",
+        "heuristic",
+        "heuristic_city",
+        "heuristic_expansion",
+        "heuristic_devcard",
+        "checkpoint",
+    ]
     weight: float = 1.0
     path: str | None = None
     """Checkpoint file for kind == "checkpoint"."""
@@ -148,6 +191,104 @@ class RuntimeConfig:
 
 
 @dataclass(frozen=True)
+class StrategyConfig:
+    """Strategy statistic z (see `carla.envs.strategy`): conditioning, pseudo-rewards, selection.
+
+    z holds an opening build order and cumulative build counts. A z is either prescribed
+    (sampled from a library of teacher games), chosen by the policy's selector head, or absent.
+    The strategy pseudo-reward is a separate objective with its own critic; it is not
+    potential-based shaping and deliberately changes what the policy optimizes.
+    """
+
+    enabled: bool = False
+    library: str | None = None
+    """z library (.npz from `carla strategy-bc`); None: the one stored in the init checkpoint."""
+    archetypes: tuple[str, ...] = ("city", "expansion", "devcard")
+    selection: Literal["prescribed", "learned", "mixed", "none"] = "prescribed"
+    """How the learner's z is set each episode. mixed: prescribed with `prescribed_prob`, else
+    learned by the selector head."""
+    prescribed_prob: float = 0.5
+    none_prob: float = 0.1
+    """Probability that an episode plays without z (all zeros), so the policy also plays
+    without an external strategy."""
+    reconsider_turns: int = 8
+    """A learned selection is reconsidered at the seat's roll every this many own turns."""
+    switch_cost: float = 0.05
+    """Strategy pseudo-reward charged when the selector switches to another archetype."""
+    pseudo_reward_prob: float = 0.5
+    """Probability that an episode with z pays the strategy pseudo-reward (AlphaStar: 25%)."""
+    pseudo_reward_coef: float = 0.5
+    """Weight of the strategy advantage in the policy gradient (outcome advantage weight 1)."""
+    build_order_weight: float = 1.0
+    statistics_weight: float = 1.0
+    decay_turns: tuple[int, ...] = (40, 80, 120)
+    """The pseudo-reward halves at each listed game turn and stops after the last."""
+    selector_entropy_coef: float = 0.01
+    sl_zero_prob: float = 0.1
+    """Behaviour cloning: probability that a demonstration game is trained without its z."""
+
+
+@dataclass(frozen=True)
+class LeagueConfig:
+    """AlphaStar-style league (`carla league`); see `carla.rl.league`."""
+
+    main_agents: int = 1
+    main_exploiters: int = 1
+    league_exploiters: int = 1
+    schedule: tuple[float, ...] = (0.5, 0.25, 0.25)
+    """Share of updates for main agents, main exploiters and league exploiters."""
+    updates_per_turn: int = 10
+    """Consecutive PPO updates of one learning player before the next one trains."""
+    teachers: tuple[str, ...] = (
+        "heuristic",
+        "heuristic_city",
+        "heuristic_expansion",
+        "heuristic_devcard",
+    )
+    """Bots that are permanent (protected) league members."""
+    seed_checkpoints: tuple[OpponentSpec, ...] = ()
+    """Fixed policy checkpoints added as protected historical players."""
+    init_checkpoint: str | None = None
+    """Initial (supervised) weights of every learning player and exploiter resets."""
+    variants: tuple[str, ...] = ("select", "none", "city", "expansion", "devcard")
+    """Strategy variants a strategy-conditioned policy opponent may play (payoff per variant)."""
+    main_branches: tuple[float, ...] = (0.35, 0.5, 0.15)
+    """Main agent matchmaking: self-play, PFSP over the league, verification."""
+    pfsp_main: Literal["squared", "linear", "variance", "linear_capped"] = "squared"
+    pfsp_exploiter: Literal["squared", "linear", "variance", "linear_capped"] = "variance"
+    pfsp_league_exploiter: Literal["squared", "linear", "variance", "linear_capped"] = (
+        "linear_capped"
+    )
+    payoff_decay: float = 0.99
+    selfplay_floor: float = 0.3
+    """Self-play falls back to the opponent's history when the pairwise rate is below this."""
+    exploiter_target: float = 0.2
+    """A main exploiter plays the current main agents while its pairwise rate exceeds this."""
+    beat_threshold: float = 0.7
+    forgotten_threshold: float = 0.7
+    exploit_threshold: float = 0.3
+    main_snapshot_steps: int = 1_000_000
+    main_snapshot_max_steps: int = 2_000_000
+    exploiter_min_steps: int = 1_000_000
+    exploiter_max_steps: int = 2_000_000
+    exploiter_min_win_rate: float = 0.3
+    """A main exploiter is frozen early only if it also wins this share of its own games."""
+    league_exploiter_reset_prob: float = 0.25
+    exploiter_objective: Literal["win", "win_and_rank", "main_loses"] = "win"
+    """win: own outcome only. win_and_rank: plus `rank_bonus` per main seat finished ahead of.
+    main_loses: +1 whenever no main agent wins (kingmaking allowed; for comparison only)."""
+    rank_bonus: float = 0.25
+    exploiter_strategy: Literal["select", "random_archetype"] = "random_archetype"
+    """Exploiter z mode after each reset (a random fixed archetype diversifies exploiters)."""
+    max_historical: int = 24
+    """Unprotected historical players kept; the least useful are pruned beyond this."""
+    tables_per_plan: int = 256
+    """Concrete tables sampled per matchmaking plan; envs draw one per episode."""
+    total_env_steps: int = 30_000_000
+    """Learner decisions over all learning players."""
+
+
+@dataclass(frozen=True)
 class ExperimentConfig:
     name: str = "default"
     seed: int = 0
@@ -158,3 +299,5 @@ class ExperimentConfig:
     opponents: OpponentPoolConfig = field(default_factory=OpponentPoolConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+    strategy: StrategyConfig = field(default_factory=StrategyConfig)
+    league: LeagueConfig = field(default_factory=LeagueConfig)

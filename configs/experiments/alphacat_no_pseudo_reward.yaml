@@ -1,0 +1,5 @@
+# Ablation: z conditioning without the strategy pseudo-reward (outcome reward and shaping only).
+extends: alphacat.yaml
+name: alphacat_no_pseudo_reward
+strategy:
+  pseudo_reward_prob: 0.0

@@ -1,0 +1,89 @@
+# AlphaCat: the AlphaStar-inspired paradigm (docs/alphacat.md). Strategy network with an LSTM
+# core, z-conditioned heads, trade decoder and critics, a strategy selector, a privileged
+# training critic; sequence BPTT; production shaping (potential-based); UPGO; KL toward the
+# strategy behaviour clone over all heads. Engine rules match the full-model runs, so their
+# checkpoints can sit at the same tables.
+#   carla strategy-bc configs/experiments/alphacat.yaml --output runs/alphacat/bc --games 2000 --epochs 16 --workers 11
+#   carla train configs/experiments/alphacat.yaml --init-from runs/alphacat/bc/bc.pt  (fixed bots)
+#   carla league configs/experiments/alphacat_league.yaml  (league)
+extends: ../base.yaml
+name: alphacat
+engine:
+  max_turns: 500
+  allow_domestic_trade: true
+  max_trade_proposals_per_turn: 3
+  max_domestic_trades_per_turn: 3
+  max_trade_cards_per_side: 4
+env:
+  strategic_features: true
+  shaping: production
+  shaping_coef: 0.1
+  production_weight: 0.5
+  shaping_gamma: 0.995
+model:
+  encoder: strategy
+  hidden_dim: 128
+  gnn_layers: 3
+  attention_heads: 4
+  seat_attention_layers: 2
+  belief: gru
+  belief_dim: 128
+  belief_loss_coef: 0.1
+  core: lstm
+  core_dim: 256
+  core_layers: 1
+  strategy_conditioning: true
+  strategy_dim: 64
+  strategy_selector: true
+  num_strategies: 3
+  privileged_value: true
+  trade_decoder: gru
+  max_trade_cards_per_side: 4
+ppo:
+  total_env_steps: 10000000
+  rollout_steps: 64
+  epochs: 4
+  minibatch_size: 2048
+  micro_batch_size: 1024
+  learning_rate: 0.0001
+  gamma: 0.995
+  gae_lambda: 0.95
+  entropy_coef: 0.01
+  trade_entropy_coef: 0.001
+  bptt: sequence
+  sequence_length: 32
+  strategy_value_coef: 0.5
+  upgo_coef: 0.5
+  reference_checkpoint: runs/alphacat/bc/bc.pt
+  reference_kl_coef: 0.05
+  reference_kl_heads: all
+strategy:
+  enabled: true
+  archetypes: [city, expansion, devcard]
+  selection: mixed
+  prescribed_prob: 0.5
+  none_prob: 0.1
+  reconsider_turns: 8
+  switch_cost: 0.05
+  pseudo_reward_prob: 0.5
+  pseudo_reward_coef: 0.5
+  decay_turns: [40, 80, 120]
+  selector_entropy_coef: 0.01
+  sl_zero_prob: 0.1
+opponents:
+  pool:
+    - kind: heuristic
+    - kind: heuristic_city
+    - kind: heuristic_expansion
+    - kind: heuristic_devcard
+eval:
+  every_env_steps: 1000000
+  boards: 10
+  deterministic: false  # Greedy play loops for imitation-initialized policies; sample instead.
+  opponents: [heuristic, "heuristic_city,heuristic_expansion,heuristic_devcard"]
+runtime:
+  num_workers: 11
+  envs_per_worker: 16
+  device: auto
+  checkpoint_every: 10
+  output_dir: runs/alphacat

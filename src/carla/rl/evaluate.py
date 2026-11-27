@@ -4,19 +4,23 @@ import csv
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+import numpy as np
 import torch
 
-from carla.agents import make_agent
+from carla.agents import TEACHERS, make_agent
 from carla.config.loader import from_dict
 from carla.config.schema import ExperimentConfig
 from carla.engine.rng import derive_seed
 from carla.envs.catan_env import CatanEnv
+from carla.envs.strategy import NONE, SELECT, STAT_NAMES, StrategyLibrary, make_controller
 from carla.eval.metrics import wilson_interval
-from carla.models.base import batch_observations
 from carla.models.factory import build_policy
+from carla.rl.acting import decide
 from carla.rl.checkpoint import isolated_rng
 from carla.rl.metrics import EVALUATION_FIELDS
 from carla.utils.logging import CsvJournal
+
+EVAL_BOTS = ("random", "heuristic", *TEACHERS)
 
 
 @dataclass(frozen=True)
@@ -31,6 +35,23 @@ class PolicyEvaluation:
     records: list[dict] = field(default_factory=list)
 
 
+def opponent_table(opponent: str) -> list[str]:
+    """Three bot names: one name for every seat, or a comma-separated table of three."""
+    names = [part.strip() for part in opponent.split(",") if part.strip()]
+    if len(names) == 1:
+        names = names * 3
+    if len(names) != 3 or any(name not in EVAL_BOTS for name in names):
+        raise ValueError(f"evaluation opponents must be one or three of {EVAL_BOTS}")
+    return names
+
+
+def default_variant(policy) -> str:
+    """Evaluation strategy of a policy: its selector when it has one, else no z."""
+    if getattr(policy, "num_strategies", 0):
+        return SELECT
+    return NONE
+
+
 @torch.no_grad()
 def evaluate_policy(
     policy,
@@ -40,15 +61,27 @@ def evaluate_policy(
     boards: int = 10,
     seed: int = 10_000,
     deterministic: bool = True,
+    strategy: str | None = None,
+    library: StrategyLibrary | None = None,
 ) -> PolicyEvaluation:
-    """Each held-out board is played in all four seats; RNG and module modes are restored."""
-    if opponent not in ("random", "heuristic") or boards <= 0:
-        raise ValueError("evaluation needs random/heuristic opponents and positive boards")
-    if config.model.encoder not in ("mlp", "gnn"):
-        raise ValueError("this evaluator supports MLP/GNN policies only")
+    """Each held-out board is played in all four seats; RNG and module modes are restored.
+
+    `opponent` names a bot or a comma-separated table of three. A strategy-conditioned policy
+    plays `strategy` ("select", "none" or an archetype; default: select if it has a selector,
+    else none); archetypes need the z `library`.
+    """
+    table = opponent_table(opponent)
+    if boards <= 0:
+        raise ValueError("evaluation needs positive boards")
+    if config.model.encoder not in ("mlp", "gnn", "strategy"):
+        raise ValueError("this evaluator supports MLP/GNN/strategy policies only")
+    variant = strategy or default_variant(policy)
+    if variant not in (SELECT, NONE) and library is None:
+        raise ValueError(f"strategy {variant!r} needs a strategy library")
     modes = [(module, module.training) for module in policy.modules()]
     device = next(policy.parameters()).device
     records = []
+    strategy_config = replace(config.strategy, pseudo_reward_prob=0.0)
     try:
         policy.eval()
         with isolated_rng(seed):
@@ -58,26 +91,41 @@ def evaluate_policy(
                     env = CatanEnv(
                         config.engine,
                         replace(config.env, learner_seat=seat),
-                        [make_agent(opponent) for _ in range(3)],
+                        [make_agent(name) for name in table],
                     )
+                    controller = (
+                        make_controller(
+                            strategy_config,
+                            variant,
+                            library,
+                            np.random.default_rng(derive_seed(game_seed, "strategy", seat)),
+                        )
+                        if policy.uses_strategy
+                        else None
+                    )
+                    env.strategy = None
                     try:
                         obs, _ = env.reset(seed=game_seed)
                         done, reward_sum, decisions = False, 0.0, 0
                         state = policy.initial_state(1, device)
                         while not done:
-                            batch = batch_observations([obs], device=device)
-                            out = policy(batch, state)
-                            state = out.state
-                            heads = out.distribution(batch["masks"]).sample(
-                                deterministic=deterministic
+                            step = decide(
+                                policy,
+                                [obs],
+                                [controller],
+                                [env.game],
+                                [seat],
+                                [env.aec.stats[seat]],
+                                deterministic=deterministic,
+                                state=state,
                             )
-                            obs, reward, terminated, truncated, info = env.step(
-                                heads[0].cpu().numpy()
-                            )
+                            state = step.output.state
+                            obs, reward, terminated, truncated, info = env.step(step.heads[0])
                             reward_sum += reward
                             decisions += 1
                             done = terminated or truncated
                         winner = info["winner"]
+                        stats = env.aec.stats[seat]
                         records.append(
                             {
                                 "eval_seed": seed,
@@ -96,6 +144,14 @@ def evaluate_policy(
                                 "learner_decisions": decisions,
                                 "turns": env.game.turn,
                                 "victory_points": env.game.victory_points(seat),
+                                "strategy": variant if policy.uses_strategy else "",
+                                "strategy_choices": (
+                                    "-".join(map(str, controller.choices)) if controller else ""
+                                ),
+                                **{
+                                    f"stat_{name}": float(value)
+                                    for name, value in zip(STAT_NAMES, stats.counts, strict=True)
+                                },
                             }
                         )
                     finally:
@@ -124,6 +180,7 @@ def evaluate_checkpoint(
     boards: int = 10,
     seed: int = 10_000,
     deterministic: bool = True,
+    strategy: str | None = None,
 ) -> PolicyEvaluation:
     with isolated_rng():
         data = torch.load(checkpoint, map_location="cpu", weights_only=False)
@@ -132,8 +189,18 @@ def evaluate_checkpoint(
         config = from_dict(ExperimentConfig, data["config"])
         policy = build_policy(config.model)
         policy.load_state_dict(data["policy"])
+        library = (
+            StrategyLibrary(data["strategy_library"]) if data.get("strategy_library") else None
+        )
         return evaluate_policy(
-            policy, config, opponent=opponent, boards=boards, seed=seed, deterministic=deterministic
+            policy,
+            config,
+            opponent=opponent,
+            boards=boards,
+            seed=seed,
+            deterministic=deterministic,
+            strategy=strategy,
+            library=library,
         )
 
 

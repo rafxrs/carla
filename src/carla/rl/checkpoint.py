@@ -43,8 +43,15 @@ def isolated_rng(seed: int | None = None):
 
 
 def save_checkpoint(
-    path: str | Path, policy, optimizer=None, config=None, training_state=None, **counters: Any
+    path: str | Path,
+    policy,
+    optimizer=None,
+    config=None,
+    training_state=None,
+    extra: dict | None = None,
+    **counters: Any,
 ) -> Path:
+    """`extra` adds top-level entries (e.g. the strategy library) next to the policy."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -56,6 +63,7 @@ def save_checkpoint(
             "counters": counters,
             "training_state": training_state,
             "rng": rng_state(),
+            **(extra or {}),
         },
         temporary,
     )

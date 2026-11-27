@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from carla.agents import make_agent
+from carla.agents import TEACHERS, make_agent
 from carla.config import save_config, to_dict
 from carla.config.loader import from_dict
 from carla.config.schema import ExperimentConfig
@@ -26,6 +26,7 @@ from carla.rl.opponents import League, bot_tables, is_league, validate_pool
 from carla.rl.ppo import PPOLearner
 from carla.rl.process_rollouts import SynchronousRolloutPool
 from carla.rl.rollout import collect_rollouts, load_reference, reset_envs
+from carla.rl.strategies import LIBRARY_KEY, StrategyAssigner, load_library
 from carla.utils.logging import CsvJournal, write_json
 from carla.utils.runs import create_run_dir, record_session
 from carla.utils.seeding import derive_seed, seed_everything
@@ -49,13 +50,58 @@ def resolve_device(name: str) -> torch.device:
     return torch.device(name)
 
 
+def validate_strategy(config: ExperimentConfig) -> None:
+    """Checks shared by `carla train`, `carla strategy-bc` and `carla league`."""
+    model, strategy = config.model, config.strategy
+    if model.encoder == "strategy" and not config.env.strategic_features:
+        raise ValueError("model.encoder=strategy needs env.strategic_features=true")
+    if model.encoder != "strategy" and (
+        model.core != "none"
+        or model.strategy_conditioning
+        or model.strategy_selector
+        or model.privileged_value
+    ):
+        raise ValueError("core, strategy conditioning and privileged values need encoder=strategy")
+    if model.core_layers <= 0 or model.core_dim <= 0 or model.strategy_dim <= 0:
+        raise ValueError("model.core_layers, core_dim and strategy_dim must be positive")
+    if model.strategy_selector and not model.strategy_conditioning:
+        raise ValueError("model.strategy_selector needs model.strategy_conditioning")
+    if strategy.enabled and not model.strategy_conditioning:
+        raise ValueError("strategy.enabled needs model.strategy_conditioning")
+    if model.strategy_selector and model.num_strategies != len(strategy.archetypes):
+        raise ValueError("model.num_strategies must equal len(strategy.archetypes)")
+    if (
+        strategy.enabled
+        and strategy.selection in ("learned", "mixed")
+        and not model.strategy_selector
+    ):
+        raise ValueError("learned strategy selection needs model.strategy_selector")
+    for name in ("prescribed_prob", "none_prob", "pseudo_reward_prob", "sl_zero_prob"):
+        if not 0 <= getattr(strategy, name) <= 1:
+            raise ValueError(f"strategy.{name} must be a probability")
+    if strategy.reconsider_turns <= 0:
+        raise ValueError("strategy.reconsider_turns must be positive")
+    if list(strategy.decay_turns) != sorted(strategy.decay_turns) or not strategy.decay_turns:
+        raise ValueError("strategy.decay_turns must be a nonempty increasing list")
+    if config.ppo.bptt == "sequence" and config.ppo.sequence_length <= 0:
+        raise ValueError("ppo.sequence_length must be positive")
+    if config.ppo.upgo_coef < 0 or config.ppo.strategy_value_coef < 0:
+        raise ValueError("ppo.upgo_coef and strategy_value_coef cannot be negative")
+
+
+EVAL_BOTS = ("random", "heuristic", *TEACHERS)
+
+
 def _validate(config: ExperimentConfig) -> None:
-    if config.model.encoder not in ("mlp", "gnn"):
-        raise ValueError("model.encoder must be mlp or gnn")
+    if config.model.encoder not in ("mlp", "gnn", "strategy"):
+        raise ValueError("model.encoder must be mlp, gnn or strategy")
+    validate_strategy(config)
     if config.model.encoder == "mlp" and (
         config.model.belief != "none" or config.model.set_attention
     ):
         raise ValueError("belief and set attention require model.encoder=gnn")
+    if config.model.encoder == "strategy" and config.model.set_attention:
+        raise ValueError("model.set_attention is built into encoder=strategy; leave it false")
     if config.model.belief not in ("none", "gru"):
         raise ValueError("model.belief must be none or gru")
     if config.model.trade_decoder == "transformer":
@@ -87,10 +133,12 @@ def _validate(config: ExperimentConfig) -> None:
         raise ValueError("evaluation interval must be nonnegative and boards positive")
     if (
         not config.eval.opponents
-        or any(name not in ("random", "heuristic") for name in config.eval.opponents)
+        or any(
+            any(part not in EVAL_BOTS for part in name.split(",")) for name in config.eval.opponents
+        )
         or len(set(config.eval.opponents)) != len(config.eval.opponents)
     ):
-        raise ValueError("evaluation opponents must be distinct random/heuristic bots")
+        raise ValueError(f"evaluation opponents must be distinct bot tables of {EVAL_BOTS}")
 
 
 def _load_initial_weights(path: Path, policy, config: ExperimentConfig) -> None:
@@ -133,7 +181,22 @@ def train(
     run_dir = Path(run_dir).resolve()
     device = resolve_device(config.runtime.device)
     policy = build_policy(config.model)
-    learner = PPOLearner(policy, config.ppo, str(device))
+    learner = PPOLearner(
+        policy,
+        config.ppo,
+        str(device),
+        strategy_coef=config.strategy.pseudo_reward_coef if config.strategy.enabled else 0.0,
+        selector_entropy_coef=config.strategy.selector_entropy_coef,
+    )
+    library = load_library(config, init_from or resume)
+    strategies = (
+        StrategyAssigner(
+            config.strategy, library, derive_seed(config.seed, "worker", 0, "strategy")
+        )
+        if config.strategy.enabled and config.runtime.num_workers == 1
+        else None
+    )
+    extra = {LIBRARY_KEY: library.to_arrays()} if library is not None else None
     # Worker processes load their own reference; only in-process collection needs this one.
     reference = load_reference(config.ppo, device) if config.runtime.num_workers == 1 else None
     league = (
@@ -194,6 +257,8 @@ def train(
             envs, observations = state["envs"], state["observations"]
             if league is not None and state.get("league") is not None:
                 league.restore(state["league"])
+            if strategies is not None and state.get("strategies") is not None:
+                strategies.restore(state["strategies"])
         elif config.runtime.envs_per_worker == 1:
             envs, observations = [state["env"]], [state["obs"]]
         else:
@@ -223,8 +288,8 @@ def train(
             )
             for i in range(len(envs))
         ]
-        if league is not None:
-            observations = reset_envs(envs, policy, league, seeds)
+        if league is not None or strategies is not None:
+            observations = reset_envs(envs, policy, league, seeds, strategies)
         else:
             observations = [env.reset(seed=seed)[0] for env, seed in zip(envs, seeds, strict=True)]
 
@@ -270,6 +335,7 @@ def train(
                 "trackers": trackers,
                 "worker_states": pool.snapshot() if pool is not None else None,
                 "league": None if league is None else league.state(),
+                "strategies": None if strategies is None else strategies.state(),
                 "log_rows": {k: v.rows for k, v in journals.items()},
                 "training_seconds": training_seconds,
                 "evaluation_seconds": evaluation_seconds,
@@ -279,6 +345,7 @@ def train(
             },
             env_steps=env_steps,
             updates=learner.version,
+            extra=extra,
         )
 
     def evaluate(target: int) -> None:
@@ -296,6 +363,7 @@ def train(
                 boards=config.eval.boards,
                 seed=config.eval.seed,
                 deterministic=config.eval.deterministic,
+                library=library,
             )
             records.extend(result.records)
             log.info(
@@ -331,7 +399,7 @@ def train(
         if init_from is not None:
             log.info("initialized policy weights from %s", init_from)
         if config.runtime.num_workers > 1:
-            pool = SynchronousRolloutPool(config, saved_workers)
+            pool = SynchronousRolloutPool(config, saved_workers, library)
         # An untrained evaluation makes the starting performance visible on every curve.
         if interval and last_evaluation < 0:
             evaluate(env_steps)
@@ -364,6 +432,8 @@ def train(
                     env_steps=env_steps,
                     reference=reference,
                     league=league,
+                    strategies=strategies,
+                    reference_heads=config.ppo.reference_kl_heads,
                 )
                 observations[:active] = next_observations
             if device.type == "cuda":

@@ -16,6 +16,7 @@ from carla.models.factory import build_policy
 from carla.rl.metrics import EpisodeTracker, RolloutDiagnostics
 from carla.rl.opponents import League, bot_tables, is_league
 from carla.rl.rollout import collect_rollouts, load_reference, reset_envs
+from carla.rl.strategies import StrategyAssigner
 from carla.utils.seeding import derive_seed, seed_everything
 
 
@@ -33,7 +34,13 @@ def _restore_random_state(state: dict) -> None:
     torch.set_rng_state(state["torch"])
 
 
-def _worker(conn: Connection, worker_id: int, config: ExperimentConfig, saved: dict | None) -> None:
+def _worker(
+    conn: Connection,
+    worker_id: int,
+    config: ExperimentConfig,
+    saved: dict | None,
+    library=None,
+) -> None:
     envs = []
     try:
         torch.set_num_threads(config.runtime.torch_threads_per_worker)
@@ -52,12 +59,28 @@ def _worker(conn: Connection, worker_id: int, config: ExperimentConfig, saved: d
             if is_league(config.opponents)
             else None
         )
+        strategies = (
+            StrategyAssigner(
+                config.strategy, library, derive_seed(config.seed, "worker", worker_id, "strategy")
+            )
+            if config.strategy.enabled
+            else None
+        )
         observations: list[dict] | None
-        if saved is None and league is not None:
-            envs = [
-                CatanEnv(config.engine, config.env, league.sample())
-                for _ in range(config.runtime.envs_per_worker)
-            ]
+        if saved is None and (league is not None or strategies is not None):
+            if league is not None:
+                envs = [
+                    CatanEnv(config.engine, config.env, league.sample())
+                    for _ in range(config.runtime.envs_per_worker)
+                ]
+            else:
+                tables = bot_tables(
+                    config.opponents, config.runtime.num_workers, config.runtime.envs_per_worker
+                )[worker_id]
+                envs = [
+                    CatanEnv(config.engine, config.env, [make_agent(kind) for kind in table])
+                    for table in tables
+                ]
             observations = None  # Reset once the first weights arrive: "self" seats need them.
             trackers = [EpisodeTracker() for _ in envs]
         elif saved is None:
@@ -82,6 +105,8 @@ def _worker(conn: Connection, worker_id: int, config: ExperimentConfig, saved: d
             _restore_random_state(saved["rng"])
             if league is not None and saved.get("league") is not None:
                 league.restore(saved["league"])
+            if strategies is not None and saved.get("strategies") is not None:
+                strategies.restore(saved["strategies"])
         conn.send(("ready", None))
         while True:
             command, payload = conn.recv()
@@ -97,6 +122,7 @@ def _worker(conn: Connection, worker_id: int, config: ExperimentConfig, saved: d
                             "trackers": trackers,
                             "rng": _random_state(),
                             "league": None if league is None else league.state(),
+                            "strategies": None if strategies is None else strategies.state(),
                         },
                     )
                 )
@@ -115,6 +141,7 @@ def _worker(conn: Connection, worker_id: int, config: ExperimentConfig, saved: d
                         derive_seed(config.seed, "worker", worker_id, "env", i)
                         for i in range(len(envs))
                     ],
+                    strategies,
                 )
             records: list[dict] = []
             diagnostics = RolloutDiagnostics()
@@ -132,6 +159,8 @@ def _worker(conn: Connection, worker_id: int, config: ExperimentConfig, saved: d
                 env_id_offset=worker_id * config.runtime.envs_per_worker,
                 reference=reference,
                 league=league,
+                strategies=strategies,
+                reference_heads=config.ppo.reference_kl_heads,
             )
             observations[:active] = next_observations
             conn.send(("ok", (batches, records, diagnostics)))
@@ -147,7 +176,9 @@ def _worker(conn: Connection, worker_id: int, config: ExperimentConfig, saved: d
 class SynchronousRolloutPool:
     """Keep environment and RNG state in each process; synchronize every PPO update."""
 
-    def __init__(self, config: ExperimentConfig, saved: list[dict] | None = None) -> None:
+    def __init__(
+        self, config: ExperimentConfig, saved: list[dict] | None = None, library=None
+    ) -> None:
         if saved is not None and len(saved) != config.runtime.num_workers:
             raise ValueError("resume worker count does not match runtime.num_workers")
         self.config = config
@@ -159,7 +190,7 @@ class SynchronousRolloutPool:
                 parent, child = context.Pipe()
                 process = context.Process(
                     target=_worker,
-                    args=(child, i, config, None if saved is None else saved[i]),
+                    args=(child, i, config, None if saved is None else saved[i], library),
                     name=f"carla-rollout-{i}",
                 )
                 process.start()

@@ -34,6 +34,10 @@ class PolicyOutput:
     """(B, 5) exact counts of the acting player's resources."""
     trade_limit: Tensor | None = None
     """(B, 1) engine card cap per side; -1 means no engine cap."""
+    strategy_value: Tensor | None = None
+    """(B,) critic of the strategy pseudo-reward (strategy-conditioned models)."""
+    strategy_logits: Tensor | None = None
+    """(B, num_strategies + 1) selector logits; the last option plays without z."""
 
     def distribution(self, masks: dict[str, Tensor]) -> FactoredDistribution | TradeDistribution:
         if self.trade_decoder is not None:
@@ -60,6 +64,10 @@ class PolicyNetwork(nn.Module):
 
     state_dim: int = 0
     """Size of the recurrent state; 0 for feed-forward models."""
+    uses_strategy: bool = False
+    """Whether the network reads the strategy statistic (`carla.envs.strategy.STRATEGY_KEY`)."""
+    num_strategies: int = 0
+    """Archetypes of the selector head (0: no selector)."""
 
     @property
     def recurrent(self) -> bool:
@@ -76,6 +84,92 @@ class PolicyNetwork(nn.Module):
 
     def forward(self, obs: dict[str, Tensor], state: Tensor | None = None) -> PolicyOutput:
         raise NotImplementedError
+
+    def unroll(
+        self, obs: dict[str, Tensor], state: Tensor | None, resets: Tensor | None, steps: int
+    ) -> PolicyOutput:
+        """Run `steps` consecutive decisions of B sequences (BPTT through the whole chunk).
+
+        `obs` rows are time-major: row t * B + b is step t of sequence b. `state` (B, state_dim)
+        is the state before step 0; `resets` (steps, B) marks steps that start a new episode, where
+        the state restarts from zeros. Outputs are row-aligned with `obs`; `state` is the final
+        state. The default loops over `forward`; feed-forward models run in one pass.
+        """
+        if not self.recurrent:
+            return self(obs, None)
+        total = obs["globals"].shape[0]
+        if total % steps:
+            raise ValueError("unroll rows must be a multiple of the step count")
+        width = total // steps
+        if state is None:
+            state = self.initial_state(width, obs["globals"].device)
+        assert state is not None
+        outputs = []
+        for t in range(steps):
+            rows = slice(t * width, (t + 1) * width)
+            if resets is not None:
+                state = torch.where(resets[t][:, None], torch.zeros_like(state), state)
+            out = self(slice_tree(obs, rows), state)
+            assert out.state is not None
+            state = out.state
+            outputs.append(out)
+        return cat_outputs(outputs, state)
+
+
+def slice_tree(tree: dict, rows) -> dict:
+    """Rows `rows` (a slice or index tensor) of every tensor in a nested observation dict."""
+    return {k: slice_tree(v, rows) if isinstance(v, dict) else v[rows] for k, v in tree.items()}
+
+
+def _cat(values: list):
+    if values[0] is None:
+        return None
+    if isinstance(values[0], dict):
+        return {k: torch.cat([v[k] for v in values]) for k in values[0]}
+    return torch.cat(values)
+
+
+def cat_outputs(outputs: list[PolicyOutput], state: Tensor | None) -> PolicyOutput:
+    """Concatenate per-step outputs (rows in order); `state` becomes the output state."""
+    first = outputs[0]
+    return PolicyOutput(
+        logits=_cat([o.logits for o in outputs]),
+        value=_cat([o.value for o in outputs]),
+        state=state,
+        belief=_cat([o.belief for o in outputs]),
+        trade_decoder=first.trade_decoder,
+        trade_context=_cat([o.trade_context for o in outputs]),
+        trade_hand=_cat([o.trade_hand for o in outputs]),
+        trade_limit=_cat([o.trade_limit for o in outputs]),
+        strategy_value=_cat([o.strategy_value for o in outputs]),
+        strategy_logits=_cat([o.strategy_logits for o in outputs]),
+    )
+
+
+def replace_rows(out: PolicyOutput, index: Tensor, sub: PolicyOutput) -> PolicyOutput:
+    """`out` with rows `index` taken from `sub` (same fields, len(index) rows)."""
+
+    def put(full, part):
+        if full is None:
+            return None
+        if isinstance(full, dict):
+            return {k: put(full[k], part[k]) for k in full}
+        result = full.clone()
+        result[index] = part
+        return result
+
+    return PolicyOutput(
+        logits=put(out.logits, sub.logits),
+        value=put(out.value, sub.value),
+        state=put(out.state, sub.state),
+        belief=put(out.belief, sub.belief),
+        trade_decoder=out.trade_decoder,
+        trade_context=put(out.trade_context, sub.trade_context),
+        trade_hand=put(out.trade_hand, sub.trade_hand),
+        trade_limit=put(out.trade_limit, sub.trade_limit),
+        strategy_value=put(out.strategy_value, sub.strategy_value),
+        strategy_logits=put(out.strategy_logits, sub.strategy_logits),
+    )
 
 
 def batch_observations(

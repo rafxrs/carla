@@ -8,6 +8,7 @@ import torch
 from carla.engine.actions import ActionType
 from carla.engine.state import Phase
 from carla.envs.action_space import MASK_SHAPES
+from carla.envs.strategy import STAT_NAMES
 from carla.models.distributions import TradeDistribution
 
 HEAD_METRICS = tuple(f"head_{key}_entropy" for key in MASK_SHAPES)
@@ -38,6 +39,15 @@ PPO_FIELDS = (
     "value_mean",
     "value_std",
 )
+STRATEGY_UPDATE_FIELDS = (
+    "strategy_value_loss",
+    "strategy_return_mean",
+    "strategy_advantage_std",
+    "selector_entropy",
+    "selections",
+    "upgo_loss",
+)
+"""Strategy pseudo-reward critic, selector and UPGO statistics (empty when unused)."""
 UPDATE_FIELDS = (
     "update",
     "env_steps",
@@ -56,7 +66,19 @@ UPDATE_FIELDS = (
     *PPO_FIELDS,
     *DIAGNOSTIC_FIELDS,
     "reference_kl",  # Appended last: older journals gain it on resume (see CsvJournal).
+    *STRATEGY_UPDATE_FIELDS,
 )
+STRATEGY_EPISODE_FIELDS = (
+    "strategy",
+    "strategy_choices",
+    "strategy_switches",
+    "strategy_adherence",
+    "strategy_return",
+    *(f"stat_{name}" for name in STAT_NAMES),
+)
+"""Per-episode strategy diagnostics: the learner's variant at the start, the selector's choices
+(archetype indices joined by '-'), switches, final distance to z, summed pseudo-reward, and the
+learner's public build statistics."""
 EPISODE_FIELDS = (
     "update",
     "env_steps",
@@ -71,6 +93,7 @@ EPISODE_FIELDS = (
     "learner_decisions",
     "turns",
     "victory_points",
+    *STRATEGY_EPISODE_FIELDS,
 )
 EVALUATION_FIELDS = (
     "update",
@@ -92,6 +115,9 @@ EVALUATION_FIELDS = (
     "learner_decisions",
     "turns",
     "victory_points",
+    "strategy",
+    "strategy_choices",
+    *(f"stat_{name}" for name in STAT_NAMES),
 )
 
 
@@ -102,9 +128,19 @@ class EpisodeTracker:
     decisions: int = 0
     partial: bool = False
     """Legacy checkpoints lack episode accumulators; omit that first incomplete record."""
+    strategy_return: float = 0.0
 
-    def step(self, reward: float, env, done: bool, env_id: int, env_steps: int) -> dict | None:
+    def step(
+        self,
+        reward: float,
+        env,
+        done: bool,
+        env_id: int,
+        env_steps: int,
+        strategy_reward: float = 0.0,
+    ) -> dict | None:
         self.reward += reward
+        self.strategy_return += strategy_reward
         self.decisions += 1
         if not done:
             return None
@@ -126,11 +162,41 @@ class EpisodeTracker:
             "learner_decisions": self.decisions,
             "turns": env.game.turn,
             "victory_points": env.game.victory_points(env.learner),
+            **strategy_record(env, self.strategy_return),
         }
         partial = self.partial
         self.episode_id += 1
         self.reward, self.decisions, self.partial = 0.0, 0, False
+        self.strategy_return = 0.0
         return None if partial else record
+
+
+def strategy_record(env, strategy_return: float = 0.0) -> dict:
+    """Strategy diagnostics of the learner's finished episode in `env` (see the fields)."""
+    stats = env.aec.stats[env.learner]
+    controller = getattr(env, "strategy", None)
+    out = {f"stat_{name}": float(v) for name, v in zip(STAT_NAMES, stats.counts, strict=True)}
+    if controller is None:
+        out.update(
+            {
+                "strategy": "",
+                "strategy_choices": "",
+                "strategy_switches": "",
+                "strategy_adherence": "",
+                "strategy_return": "",
+            }
+        )
+        return out
+    out.update(
+        {
+            "strategy": controller.mode if controller.mode != "prescribed" else controller.label,
+            "strategy_choices": "-".join(str(c) for c in controller.choices),
+            "strategy_switches": controller.switches,
+            "strategy_adherence": controller.adherence(stats),
+            "strategy_return": strategy_return,
+        }
+    )
+    return out
 
 
 @dataclass

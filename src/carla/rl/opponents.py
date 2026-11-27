@@ -22,7 +22,7 @@ from carla.envs.catan_env import ExternalAgent
 from carla.models.base import PolicyNetwork
 from carla.models.factory import build_policy
 
-BOT_KINDS = ("random", "heuristic")
+BOT_KINDS = ("random", "heuristic", "heuristic_city", "heuristic_expansion", "heuristic_devcard")
 POLICY_KINDS = ("self", "snapshot", "checkpoint")
 
 

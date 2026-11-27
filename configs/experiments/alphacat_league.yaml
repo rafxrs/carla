@@ -1,0 +1,29 @@
+# AlphaCat league: one main agent, one main exploiter, one league exploiter (AlphaStar's roles),
+# with the heuristic teachers and the earlier full-model checkpoint as protected members.
+# Learners start from the strategy behaviour clone; exploiters reset to it.
+#   carla league configs/experiments/alphacat_league.yaml
+extends: alphacat.yaml
+name: alphacat_league
+league:
+  init_checkpoint: runs/alphacat/bc/bc.pt
+  main_agents: 1
+  main_exploiters: 1
+  league_exploiters: 1
+  schedule: [0.5, 0.25, 0.25]
+  updates_per_turn: 10
+  teachers: [heuristic, heuristic_city, heuristic_expansion, heuristic_devcard]
+  seed_checkpoints:
+    - kind: checkpoint
+      name: full_trade_7M
+      path: outputs/full_trade_production_heuristic-20261124-210028-ce6fcc76-20261126T211130Z-1-001/full_trade_production_heuristic-20261124-210028-ce6fcc76/checkpoints/step_000007003136.pt
+  variants: [select, none, city, expansion, devcard]
+  main_branches: [0.35, 0.5, 0.15]
+  main_snapshot_steps: 1000000
+  main_snapshot_max_steps: 2000000
+  exploiter_min_steps: 1000000
+  exploiter_max_steps: 2000000
+  exploiter_objective: win
+  exploiter_strategy: random_archetype
+  max_historical: 24
+  tables_per_plan: 256
+  total_env_steps: 20000000

@@ -1,0 +1,12 @@
+# Ablation: no strategy statistic (no z conditioning, selector or pseudo-reward); the clone
+# still learns from all teachers (without z). Needs its own behaviour clone (the model differs):
+#   carla strategy-bc configs/experiments/alphacat_no_strategy.yaml --output runs/alphacat/bc_no_strategy
+extends: alphacat.yaml
+name: alphacat_no_strategy
+model:
+  strategy_conditioning: false
+  strategy_selector: false
+strategy:
+  enabled: false
+ppo:
+  reference_kl_coef: 0.0

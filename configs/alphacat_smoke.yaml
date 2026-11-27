@@ -1,0 +1,63 @@
+# Seconds-long end-to-end check of the strategy paradigm: a tiny strategy net with LSTM core,
+# z conditioning and selector. Behaviour cloning, then PPO with strategies and sequence BPTT:
+#   carla strategy-bc configs/alphacat_smoke.yaml --output runs/alphacat_smoke/bc --games 12 --epochs 1 --eval-boards 1
+#   carla train configs/alphacat_smoke.yaml --init-from runs/alphacat_smoke/bc/bc.pt
+extends: base.yaml
+name: alphacat_smoke
+engine:
+  max_turns: 80
+  allow_domestic_trade: true
+env:
+  strategic_features: true
+model:
+  encoder: strategy
+  hidden_dim: 32
+  gnn_layers: 1
+  attention_heads: 2
+  seat_attention_layers: 1
+  belief: gru
+  belief_dim: 16
+  core: lstm
+  core_dim: 32
+  strategy_conditioning: true
+  strategy_dim: 16
+  strategy_selector: true
+  num_strategies: 3
+  privileged_value: true
+  trade_decoder: gru
+ppo:
+  total_env_steps: 256
+  rollout_steps: 32
+  minibatch_size: 64
+  epochs: 1
+  bptt: sequence
+  sequence_length: 8
+  upgo_coef: 0.5
+strategy:
+  enabled: true
+  selection: mixed
+  reconsider_turns: 2
+opponents:
+  pool:
+    - kind: heuristic_city
+    - kind: heuristic_expansion
+    - kind: heuristic_devcard
+runtime:
+  num_workers: 1
+  envs_per_worker: 2
+  device: cpu
+  output_dir: runs/alphacat_smoke
+eval:
+  every_env_steps: 0
+# League smoke run (`carla league configs/alphacat_smoke.yaml`): tiny snapshot thresholds so
+# snapshots, exploiter resets and pruning all happen within a minute.
+league:
+  init_checkpoint: runs/alphacat_smoke/bc/bc.pt
+  total_env_steps: 1536
+  updates_per_turn: 2
+  main_snapshot_steps: 128
+  main_snapshot_max_steps: 256
+  exploiter_min_steps: 64
+  exploiter_max_steps: 128
+  max_historical: 3
+  tables_per_plan: 16

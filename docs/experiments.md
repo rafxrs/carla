@@ -243,6 +243,12 @@ each learner decision brings about two opponent network passes.
 its opening (`docs/img/heuristic_setup.png`) and its turn as a state machine with measured branch
 frequencies (`docs/img/heuristic_turn.png`); it needs Graphviz.
 
+## AlphaCat
+
+The AlphaStar-inspired paradigm (strategy network with an LSTM core, strategy statistic z,
+styled teachers, strategy selection, league with exploiters) has its own guide:
+[alphacat.md](alphacat.md).
+
 ## Analysis and final tests
 
 Analysis accepts individual run directories or a sweep root. It rejects duplicate records,

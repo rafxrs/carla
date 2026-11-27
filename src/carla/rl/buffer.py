@@ -26,6 +26,11 @@ class RolloutBatch:
     """Opponents' cards per step, for the belief auxiliary loss."""
     initial_state: np.ndarray | None = None
     """Recurrent state before the first step (recurrent models)."""
+    strategy_rewards: np.ndarray | None = None
+    """Strategy pseudo-rewards per decision (strategy-conditioned models; zeros when the
+    episode's pseudo-reward is inactive). A separate objective with its own critic."""
+    strategy_values: np.ndarray | None = None
+    last_strategy_value: float = 0.0
 
     def __len__(self) -> int:
         return len(self.actions)

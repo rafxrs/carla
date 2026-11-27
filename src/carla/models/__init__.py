@@ -6,6 +6,7 @@ from carla.models.factory import build_policy
 from carla.models.gnn import GNNPolicy
 from carla.models.graph import board_graph
 from carla.models.mlp import MLPPolicy
+from carla.models.strategy_net import StrategyNet
 
 __all__ = [
     "FactoredDistribution",
@@ -13,6 +14,7 @@ __all__ = [
     "MLPPolicy",
     "PolicyNetwork",
     "PolicyOutput",
+    "StrategyNet",
     "batch_observations",
     "board_graph",
     "build_policy",

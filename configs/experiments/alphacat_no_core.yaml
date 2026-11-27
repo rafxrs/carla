@@ -1,0 +1,7 @@
+# Ablation: no recurrent core (the GRU belief remains; one-decision BPTT).
+extends: alphacat.yaml
+name: alphacat_no_core
+model:
+  core: none
+ppo:
+  bptt: step
