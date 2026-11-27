@@ -42,6 +42,11 @@ The ports reproduce upstream behaviour, bugs included. Changing any of these cha
   player's 10 actual VP.
 - Dice probabilities are built by adding 1/36 per pair, `proba_point = 2.778 / 100`, and terms
   are summed in `base_fn`'s order.
+- Exact ties go to the first move in Catanatron's generation order (`order.py`): dev cards
+  before rolling or ending the turn, settlements by Catanatron node id, set-ordered bank
+  trades, Year of Plenty and robber victims. F ties about 15 times a game; breaking them in
+  CARLA's order made the port 4 points weaker than the original in the parity run. On
+  Catanatron's engine the host passes its own order (`legal_order = "given"`).
 
 **`EngineConfig.catanatron_rules`** (`engine/rules.py`): shortages pay nobody; discards go in
 seat order from seat 0; road trails never enter an opponent's corner, and lengths are running
@@ -74,7 +79,9 @@ off by default and out of `to_dict` when False.
    --max-decisions 400`, with and without `--trading`, for seeds 12, 31, 47, 58, 101, 202, 303
    and 404. Expect no divergence except seed 202, seat 2 (FAST).
 4. Catanatron corpus: `check_catanatron_policy.py compare --bots f ab2 --seeds 12 31 47 58
-   --information open --chance upstream`. Expect F 100% and AB2 at least 99.8%.
+   --information open --chance upstream`. Expect F 100% and AB2 at least 99.8%. Run
+   `tests/agents/test_catanatron_order.py` with Catanatron installed after touching
+   `order.py`.
 5. After behavioural changes, rerun `run_strength_parity.py` and update
    `results/policy_corpus.json` and the tables in [README.md](README.md).
 
@@ -104,6 +111,10 @@ Agreement fails at the first differing *move*, but the cause is usually the firs
   placement.
 - AB2 upstream: inner-node road and maritime order (networkx and set iteration) is not
   reproduced.
+- Root order under CARLA (`order.py`): roads are emulated from the public board and match the
+  rebuilt Catanatron game in about 96% of positions; everything else matches exactly. Bank
+  trades hold `None`, whose hash is an address before Python 3.12, so their order is only
+  stable within a process, upstream's included.
 - Catanatron mirror: road lengths and the Longest Road holder are adopted from Catanatron
   where its component bookkeeping differs (counted in `CarlaPlayer.road_resyncs`).
 - JSettlers server: trading off; hidden-world search agents unsupported; opponents' discard

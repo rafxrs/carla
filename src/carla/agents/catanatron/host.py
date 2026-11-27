@@ -352,6 +352,7 @@ class CarlaPlayer(Player):
                 rng = random.Random()
                 rng.setstate(game.state.random.getstate())
             self.agent.chance_rng = rng
+            self.agent.legal_order = "given"  # playable actions are already in upstream order
             # The deck is pre-shuffled and drawn from the end: top card first.
             self.agent.chance_deck = (
                 tuple(CARDS.index(c) for c in reversed(game.state.development_listdeck))

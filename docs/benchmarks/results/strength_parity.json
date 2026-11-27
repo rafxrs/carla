@@ -1,0 +1,274 @@
+{
+  "conditions": {
+    "catanatron-ab2|trading=0": {
+      "scheduled": 1280,
+      "failures": 0,
+      "truncations": 0,
+      "heuristic_wins": 373,
+      "heuristic_win_rate": 0.29140625,
+      "heuristic_win_rate_ci95": [
+        0.2671875,
+        0.31796875
+      ],
+      "heuristic_mean_vp": 7.30625,
+      "best_bot_mean_vp": 9.2390625,
+      "mean_seconds": 70.75411718750004
+    },
+    "catanatron-f|trading=0": {
+      "scheduled": 1280,
+      "failures": 0,
+      "truncations": 0,
+      "heuristic_wins": 405,
+      "heuristic_win_rate": 0.31640625,
+      "heuristic_win_rate_ci95": [
+        0.29140625,
+        0.34453125
+      ],
+      "heuristic_mean_vp": 7.46875,
+      "best_bot_mean_vp": 9.14140625,
+      "mean_seconds": 6.597967187500006
+    },
+    "jsettlers-fast-adapted|trading=0": {
+      "scheduled": 640,
+      "failures": 0,
+      "truncations": 0,
+      "heuristic_wins": 157,
+      "heuristic_win_rate": 0.2453125,
+      "heuristic_win_rate_ci95": [
+        0.2109375,
+        0.2828125
+      ],
+      "heuristic_mean_vp": 7.2828125,
+      "best_bot_mean_vp": 9.521875,
+      "mean_seconds": 10.388532812500001
+    },
+    "jsettlers-fast-adapted|trading=1": {
+      "scheduled": 640,
+      "failures": 0,
+      "truncations": 0,
+      "heuristic_wins": 256,
+      "heuristic_win_rate": 0.4,
+      "heuristic_win_rate_ci95": [
+        0.3609375,
+        0.440625
+      ],
+      "heuristic_mean_vp": 8.51875,
+      "best_bot_mean_vp": 9.1640625,
+      "mean_seconds": 8.188315624999982
+    },
+    "jsettlers-fast-native|trading=0": {
+      "scheduled": 640,
+      "failures": 0,
+      "truncations": 0,
+      "heuristic_wins": 161,
+      "heuristic_win_rate": 0.2515625,
+      "heuristic_win_rate_ci95": [
+        0.21875,
+        0.2875
+      ],
+      "heuristic_mean_vp": 7.3,
+      "best_bot_mean_vp": 9.5171875,
+      "mean_seconds": 8.53037812500001
+    },
+    "jsettlers-fast-native|trading=1": {
+      "scheduled": 640,
+      "failures": 0,
+      "truncations": 0,
+      "heuristic_wins": 257,
+      "heuristic_win_rate": 0.4015625,
+      "heuristic_win_rate_ci95": [
+        0.3609375,
+        0.4421875
+      ],
+      "heuristic_mean_vp": 8.51875,
+      "best_bot_mean_vp": 9.1640625,
+      "mean_seconds": 9.521821875000002
+    },
+    "jsettlers-smart-adapted|trading=0": {
+      "scheduled": 640,
+      "failures": 0,
+      "truncations": 0,
+      "heuristic_wins": 131,
+      "heuristic_win_rate": 0.2046875,
+      "heuristic_win_rate_ci95": [
+        0.171875,
+        0.240625
+      ],
+      "heuristic_mean_vp": 7.3640625,
+      "best_bot_mean_vp": 9.534375,
+      "mean_seconds": 22.040226562499985
+    },
+    "jsettlers-smart-adapted|trading=1": {
+      "scheduled": 640,
+      "failures": 0,
+      "truncations": 0,
+      "heuristic_wins": 256,
+      "heuristic_win_rate": 0.4,
+      "heuristic_win_rate_ci95": [
+        0.3640625,
+        0.4390625
+      ],
+      "heuristic_mean_vp": 8.5390625,
+      "best_bot_mean_vp": 9.084375,
+      "mean_seconds": 32.049140625000035
+    },
+    "jsettlers-smart-native|trading=0": {
+      "scheduled": 640,
+      "failures": 0,
+      "truncations": 0,
+      "heuristic_wins": 132,
+      "heuristic_win_rate": 0.20625,
+      "heuristic_win_rate_ci95": [
+        0.175,
+        0.2390625
+      ],
+      "heuristic_mean_vp": 7.359375,
+      "best_bot_mean_vp": 9.534375,
+      "mean_seconds": 47.197595312499985
+    },
+    "jsettlers-smart-native|trading=1": {
+      "scheduled": 640,
+      "failures": 0,
+      "truncations": 0,
+      "heuristic_wins": 260,
+      "heuristic_win_rate": 0.40625,
+      "heuristic_win_rate_ci95": [
+        0.3703125,
+        0.44375
+      ],
+      "heuristic_mean_vp": 8.5453125,
+      "best_bot_mean_vp": 9.05625,
+      "mean_seconds": 98.42450468749993
+    },
+    "native-ab2-upstream|trading=0": {
+      "scheduled": 1280,
+      "failures": 0,
+      "truncations": 0,
+      "heuristic_wins": 371,
+      "heuristic_win_rate": 0.28984375,
+      "heuristic_win_rate_ci95": [
+        0.265625,
+        0.315625
+      ],
+      "heuristic_mean_vp": 7.3078125,
+      "best_bot_mean_vp": 9.24140625,
+      "mean_seconds": 30.902315625000075
+    },
+    "native-f-upstream|trading=0": {
+      "scheduled": 1280,
+      "failures": 0,
+      "truncations": 0,
+      "heuristic_wins": 423,
+      "heuristic_win_rate": 0.33046875,
+      "heuristic_win_rate_ci95": [
+        0.30390625,
+        0.35703125
+      ],
+      "heuristic_mean_vp": 7.49921875,
+      "best_bot_mean_vp": 9.11171875,
+      "mean_seconds": 1.19616953125
+    }
+  },
+  "pairs": {
+    "catanatron-f|trading=0": {
+      "paired_games": 1280,
+      "heuristic_win_rate_vs_wrapper": 0.31640625,
+      "heuristic_win_rate_vs_port": 0.33046875,
+      "difference_wrapper_minus_port": -0.0140625,
+      "difference_ci95_board_bootstrap": [
+        -0.0375,
+        0.00859375
+      ],
+      "mcnemar_discordant": [
+        99,
+        117
+      ],
+      "mcnemar_exact_p": 0.24733281888174374,
+      "verdict": "equivalent"
+    },
+    "catanatron-ab2|trading=0": {
+      "paired_games": 1280,
+      "heuristic_win_rate_vs_wrapper": 0.29140625,
+      "heuristic_win_rate_vs_port": 0.28984375,
+      "difference_wrapper_minus_port": 0.0015625,
+      "difference_ci95_board_bootstrap": [
+        -0.01796875,
+        0.0203125
+      ],
+      "mcnemar_discordant": [
+        73,
+        71
+      ],
+      "mcnemar_exact_p": 0.9336249535488027,
+      "verdict": "equivalent"
+    },
+    "jsettlers-fast|trading=0": {
+      "paired_games": 640,
+      "heuristic_win_rate_vs_wrapper": 0.2453125,
+      "heuristic_win_rate_vs_port": 0.2515625,
+      "difference_wrapper_minus_port": -0.00625,
+      "difference_ci95_board_bootstrap": [
+        -0.0125,
+        -0.0015625
+      ],
+      "mcnemar_discordant": [
+        0,
+        4
+      ],
+      "mcnemar_exact_p": 0.125,
+      "verdict": "equivalent"
+    },
+    "jsettlers-fast|trading=1": {
+      "paired_games": 640,
+      "heuristic_win_rate_vs_wrapper": 0.4,
+      "heuristic_win_rate_vs_port": 0.4015625,
+      "difference_wrapper_minus_port": -0.0015625,
+      "difference_ci95_board_bootstrap": [
+        -0.0109375,
+        0.0078125
+      ],
+      "mcnemar_discordant": [
+        5,
+        6
+      ],
+      "mcnemar_exact_p": 1.0,
+      "verdict": "equivalent"
+    },
+    "jsettlers-smart|trading=0": {
+      "paired_games": 640,
+      "heuristic_win_rate_vs_wrapper": 0.2046875,
+      "heuristic_win_rate_vs_port": 0.20625,
+      "difference_wrapper_minus_port": -0.0015625,
+      "difference_ci95_board_bootstrap": [
+        -0.0125,
+        0.009375
+      ],
+      "mcnemar_discordant": [
+        5,
+        6
+      ],
+      "mcnemar_exact_p": 1.0,
+      "verdict": "equivalent"
+    },
+    "jsettlers-smart|trading=1": {
+      "paired_games": 640,
+      "heuristic_win_rate_vs_wrapper": 0.4,
+      "heuristic_win_rate_vs_port": 0.40625,
+      "difference_wrapper_minus_port": -0.00625,
+      "difference_ci95_board_bootstrap": [
+        -0.021875,
+        0.0109375
+      ],
+      "mcnemar_discordant": [
+        15,
+        19
+      ],
+      "mcnemar_exact_p": 0.6075913612730801,
+      "verdict": "equivalent"
+    }
+  },
+  "margin": 0.05,
+  "min_boards": 30,
+  "retried_failures_recovered": 9,
+  "note": "Heuristic against three copies of one bot, CARLA referee; 0.25 is parity. Intervals resample boards (each board is played in all four seats). Port and wrapper games share seeds but diverge after their first different decision."
+}

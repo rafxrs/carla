@@ -25,6 +25,7 @@ import math
 
 from carla.agents.api import AgentView
 from carla.agents.base import Agent
+from carla.agents.catanatron.order import catanatron_order
 from carla.engine.actions import CANCEL_TRADE, REJECT_TRADE, ActionType
 from carla.engine.constants import PIPS
 from carla.engine.rng import Rng, derive_seed
@@ -224,6 +225,10 @@ class NativeCatanatronAgent(Agent):
         """Upstream mode: the generator to draw from (hosted: Catanatron's `random`)."""
         self.chance_deck = None
         """Upstream mode: development cards in draw order, top first, when known."""
+        self.legal_order = "catanatron"
+        """Upstream mode: "catanatron" sorts root moves into Catanatron's generation order
+        (`order.py`), which decides exact ties; "given" keeps the caller's order (hosted on
+        Catanatron's engine, whose playable actions already come in that order)."""
         base = "native-f" if depth == 1 else f"native-ab{depth}"
         self.name = base if chance == "exact" else f"{base}-upstream"
 
@@ -384,6 +389,8 @@ class NativeCatanatronAgent(Agent):
         ]
         if len(actions) == 1:
             return actions[0]
+        if self.chance == "upstream" and self.legal_order == "catanatron":
+            actions = catanatron_order(game.state, seat, actions)
         world = (
             game.clone()
             if self.information == "open"

@@ -14,10 +14,13 @@ same game seeds, so their games are paired by (board, seat). Two questions are a
 Pairs: catanatron-f / native-f-upstream, catanatron-ab2 / native-ab2-upstream (no domestic
 trading; Catanatron never trades), and jsettlers-{fast,smart}-adapted / -native (with and
 without domestic trading; native in `java-adapter` mode by default, the wrapper's own boundary
-policy). Failed games are recorded, never replaced, and excluded from pairing only.
+policy). Failed games are recorded and excluded from pairing. `--retry-failures` replays them
+after a fix: the failure stays in the journal, the retry is appended, and analysis uses each
+game's latest row.
 
 Example (about 50 minutes on 16 cores):
     python scripts/run_strength_parity.py --boards 160 --output outputs/benchmarks/parity
+    python scripts/run_strength_parity.py --retry-failures --output outputs/benchmarks/parity
     python scripts/run_strength_parity.py --analyze-only --output outputs/benchmarks/parity
 """
 
@@ -123,10 +126,29 @@ def mcnemar_exact(b, c):
     return min(1.0, 2 * tail)
 
 
+def latest(rows):
+    """Each game's last journaled row, and how many games a retry turned from failed to done."""
+    last, failed_before = {}, set()
+    for r in rows:
+        key = (r["condition"], r["board"], r["seat"])
+        if key in last and last[key]["failure"] is not None:
+            failed_before.add(key)
+        last[key] = r
+    recovered = sum(last[k]["failure"] is None for k in failed_before)
+    return list(last.values()), recovered
+
+
 def analyze(rows, margin, seed=0, min_boards=30):
     rng = random.Random(seed)
     mean = lambda xs: sum(xs) / len(xs) if xs else float("nan")  # noqa: E731
-    report = {"conditions": {}, "pairs": {}, "margin": margin, "min_boards": min_boards}
+    rows, recovered = latest(rows)
+    report = {
+        "conditions": {},
+        "pairs": {},
+        "margin": margin,
+        "min_boards": min_boards,
+        "retried_failures_recovered": recovered,
+    }
     by_condition = {}
     for r in rows:
         by_condition.setdefault(r["condition"], []).append(r)
@@ -251,6 +273,9 @@ def main():
     parser.add_argument("--min-boards", type=int, default=30, help="boards needed for a verdict")
     parser.add_argument("--output", type=Path, default=Path("outputs/benchmarks/parity"))
     parser.add_argument("--analyze-only", action="store_true")
+    parser.add_argument(
+        "--retry-failures", action="store_true", help="replay games whose latest row failed"
+    )
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     journal = args.output / "games.jsonl"
@@ -261,6 +286,15 @@ def main():
             for variable in ("JSETTLERS_JAR", "CARLA_JSETTLERS_CLASSES"):
                 if not os.environ.get(variable):
                     parser.error(f"{variable} is required for the Java wrappers")
+        # Each pass (first run, resume, retry) keeps its own manifest and source archive.
+        if (args.output / "manifest.json").exists():
+            k = 1
+            while (args.output / f"manifest-{k}.json").exists():
+                k += 1
+            for name, suffix in (("manifest", ".json"), ("source", ".zip")):
+                old = args.output / f"{name}{suffix}"
+                if old.exists():
+                    old.rename(args.output / f"{name}-{k}{suffix}")
         manifest = {
             "schema": 1,
             "referee": "CARLA (official rules)",
@@ -271,13 +305,21 @@ def main():
             "max_turns": args.max_turns,
             "jsettlers_native_mode": args.jsettlers_mode,
             "margin": args.margin,
+            "retry_failures": args.retry_failures,
             "python": platform.python_version(),
             "python_hash_seed": fixed_hash_seed(),
-            "failure_policy": "recorded, never replaced; resumed runs skip games already journaled",
+            "failure_policy": (
+                "recorded and kept; resumed runs skip journaled games; --retry-failures appends "
+                "a replay and analysis uses each game's latest row"
+            ),
             **archive_sources(args.output),
         }
         (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-        done = {(r["condition"], r["board"], r["seat"]) for r in rows}
+        done = {
+            (r["condition"], r["board"], r["seat"])
+            for r in latest(rows)[0]
+            if not (args.retry_failures and r["failure"] is not None)
+        }
         jobs = [
             (c, board, seat, derive_seed(args.seed, "parity-board", board))
             for board in range(args.boards)  # board-major: partial runs stay balanced

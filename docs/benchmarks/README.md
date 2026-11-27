@@ -91,7 +91,22 @@ python scripts/run_strength_parity.py --boards 160 --output outputs/benchmarks/p
 CARLA heuristic against three copies of each port and of each wrapper on shared seeds, and
 reports the paired difference in the heuristic's win rate, with a board-clustered interval
 and an equivalence verdict (±5 points by default). The same run places the heuristic
-relative to every bot.
+relative to every bot. `--retry-failures` replays failed games after a fix.
+
+Results ([results/strength_parity.json](results/strength_parity.json); seed 7000552, 320
+boards for Catanatron and 160 for JSettlers, each in all four seats; 0.25 is parity):
+
+| Pair | Trading | Heuristic vs original | Heuristic vs port | Original minus port (95% CI) | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| Catanatron F | off | 0.316 | 0.330 | −0.014 [−0.037, +0.009] | equivalent |
+| Catanatron AB2 | off | 0.291 | 0.290 | +0.002 [−0.018, +0.020] | equivalent |
+| JSettlers FAST | off | 0.245 | 0.252 | −0.006 [−0.013, −0.002] | equivalent |
+| JSettlers FAST | on | 0.400 | 0.402 | −0.002 [−0.011, +0.008] | equivalent |
+| JSettlers SMART | off | 0.205 | 0.206 | −0.002 [−0.013, +0.009] | equivalent |
+| JSettlers SMART | on | 0.400 | 0.406 | −0.006 [−0.022, +0.011] | equivalent |
+
+The CARLA heuristic is about even with FAST and below SMART without trading, beats both
+Catanatron bots, and wins about 40% against either JSettlers bot when domestic trading is on.
 
 ## Declared differences
 
@@ -99,7 +114,9 @@ Report results with these conditions:
 
 - **Rules.** Under CARLA's referee all bots play official rules. Catanatron's own engine differs
   on bank shortages, discard order, road counting and Longest Road after a cut;
-  `EngineConfig.catanatron_rules` reproduces them, and the mirror uses it.
+  `EngineConfig.catanatron_rules` reproduces them, and the mirror uses it. JSettlers' bank is
+  unlimited; under CARLA a bank trade the bank cannot pay is skipped and the turn ends, in the
+  port and the wrapper alike.
 - **Randomness.** Under CARLA, the upstream-mode ports draw from their own seeded RNG, so they
   match the originals statistically, not move for move.
 - **Trading protocol.** JSettlers accepts immediately. CARLA collects every response and the
