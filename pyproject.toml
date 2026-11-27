@@ -38,6 +38,9 @@ dev = [
 [project.scripts]
 carla = "carla.cli:main"
 
+[tool.hatch.metadata]
+allow-direct-references = true  # the `benchmarks` extra pins Catanatron to a git commit
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/carla"]
 
