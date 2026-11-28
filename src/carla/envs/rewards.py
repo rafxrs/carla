@@ -1,11 +1,13 @@
 """Reward functions (per step, per seat)."""
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from itertools import islice
 
 import numpy as np
 
 from carla.config.schema import EnvConfig
+from carla.engine.actions import ActionType
 from carla.engine.constants import (
     CITY_COST,
     DESERT,
@@ -20,9 +22,15 @@ from carla.engine.constants import (
     DevCard,
 )
 from carla.engine.game import Game
-from carla.engine.rules import city_corners, road_edges, settlement_corners, victory_points
-from carla.engine.state import GameState
-from carla.engine.topology import CORNER_TILES
+from carla.engine.rules import (
+    city_corners,
+    distance_rule_ok,
+    road_edges,
+    settlement_corners,
+    victory_points,
+)
+from carla.engine.state import SETUP_ORDER, GameState
+from carla.engine.topology import CORNER_TILES, EDGE_CORNERS
 
 
 def public_victory_points(game: Game) -> np.ndarray:
@@ -33,12 +41,19 @@ def public_victory_points(game: Game) -> np.ndarray:
 
 def expected_production(state: GameState, seat: int, *, robber: bool = True) -> tuple[float, ...]:
     """Raw expected cards per roll by resource, using public board information only."""
+    buildings = (
+        (corner, state.corner_building[corner])
+        for corner, owner in enumerate(state.corner_owner)
+        if owner == seat
+    )
+    return _building_production(state, buildings, robber=robber)
+
+
+def _building_production(
+    state: GameState, buildings: Iterable[tuple[int, int]], *, robber: bool
+) -> tuple[float, ...]:
     expected = [0.0] * NUM_RESOURCES
-    for corner, owner in enumerate(state.corner_owner):
-        if owner != seat:
-            continue
-        # Building's enum value is its production multiplier: settlement=1, city=2.
-        multiplier = state.corner_building[corner]
+    for corner, multiplier in buildings:
         for tile in CORNER_TILES[corner]:
             resource = state.board.tile_resource[tile]
             if (not robber or tile != state.robber_tile) and resource != DESERT:
@@ -71,21 +86,27 @@ def build_readiness(state: GameState, seat: int, config: EnvConfig = _DEFAULT_CO
     )
 
 
-def build_readiness_components(state: GameState, seat: int) -> tuple[float, float, float, float]:
+def build_readiness_components(
+    state: GameState, seat: int, *, expansion_roads: bool = False
+) -> tuple[float, float, float, float]:
     """Readiness from this seat's known hand and cost-independent normal-play geometry.
 
     Call only for the learner. Opponent hands must never enter the strategic potential.
     The deck's remaining size, unlike its composition, is public.
     """
     hand = state.hands[seat]
-    road = _purchase_readiness(
-        hand, ROAD_COST, state.roads_left[seat] > 0 and bool(road_edges(state, seat))
-    )
-    settlement = _purchase_readiness(
-        hand,
-        SETTLEMENT_COST,
-        state.settlements_left[seat] > 0 and bool(settlement_corners(state, seat)),
-    )
+    has_settlement_piece = state.settlements_left[seat] > 0
+    reachable = settlement_corners(state, seat) if has_settlement_piece else []
+    candidate_roads = road_edges(state, seat) if state.roads_left[seat] > 0 else []
+    road_available = bool(candidate_roads)
+    if expansion_roads:
+        road_available = has_settlement_piece and any(
+            corner not in reachable and distance_rule_ok(state, corner)
+            for edge in candidate_roads
+            for corner in EDGE_CORNERS[edge]
+        )
+    road = _purchase_readiness(hand, ROAD_COST, road_available)
+    settlement = _purchase_readiness(hand, SETTLEMENT_COST, bool(reachable))
     city = _purchase_readiness(
         hand, CITY_COST, state.cities_left[seat] > 0 and bool(city_corners(state, seat))
     )
@@ -211,6 +232,32 @@ def resource_conservation(hand: Sequence[int], normalization: float) -> float:
 
 def strategic_v2_components(game: Game, seat: int, config: EnvConfig) -> StrategicV2Components:
     """Evaluate ESP-V2 once. Opponent tuples follow seat order, excluding the learner."""
+    return _strategic_economic_components(game, seat, config, opening_expansion=False)
+
+
+def opening_quality(game: Game, seat: int, config: EnvConfig) -> float:
+    """Score the recorded starting corners, always as settlements on the original board."""
+    # Each setup step has exactly two decisions: settlement, then road. That immutable prefix
+    # is retained in live games and in their training checkpoints.
+    buildings = (
+        (step.action.corner, 1)
+        for step in islice(game.history, 2 * len(SETUP_ORDER))
+        if step.player == seat and step.action.type == ActionType.BUILD_SETTLEMENT
+    )
+    capacity = _building_production(game.state, buildings, robber=False)
+    quantity = min(sum(capacity) / (30 / 36), 1.0)
+    diversity = production_diversity(capacity, config.v2_resource_coverage_threshold)
+    return 0.75 * quantity + 0.25 * diversity
+
+
+def strategic_v3_components(game: Game, seat: int, config: EnvConfig) -> StrategicV2Components:
+    """Evaluate ESP-V3 with blended production and expansion-aware road readiness."""
+    return _strategic_economic_components(game, seat, config, opening_expansion=True)
+
+
+def _strategic_economic_components(
+    game: Game, seat: int, config: EnvConfig, *, opening_expansion: bool
+) -> StrategicV2Components:
     state = game.state
     victory = min(victory_points(state, seat, include_hidden=True) / 10.0, 1.0)
     quantity = production_strength(state, seat, config)
@@ -221,7 +268,13 @@ def strategic_v2_components(game: Game, seat: int, config: EnvConfig) -> Strateg
         config.v2_production_quantity_weight * quantity
         + config.v2_production_diversity_weight * diversity
     )
-    road, settlement, city, dev = build_readiness_components(state, seat)
+    if opening_expansion:
+        alpha = config.v3_opening_blend * max(0.0, 1 - state.turn / config.v3_opening_taper_turns)
+        if alpha:
+            production = (1 - alpha) * production + alpha * opening_quality(game, seat, config)
+    road, settlement, city, dev = build_readiness_components(
+        state, seat, expansion_roads=opening_expansion
+    )
     readiness = (
         config.v2_readiness_road_weight * road
         + config.v2_readiness_settlement_weight * settlement
@@ -276,6 +329,8 @@ def potential(game: Game, seat: int, config: EnvConfig) -> float:
         return strategic_potential(game, seat, config)
     if config.shaping == "strategic_v2":
         return strategic_v2_components(game, seat, config).potential
+    if config.shaping == "strategic_v3":
+        return strategic_v3_components(game, seat, config).potential
     own = game.victory_points(seat, include_hidden=True)
     if config.shaping == "margin":
         own -= max(

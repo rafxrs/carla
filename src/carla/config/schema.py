@@ -20,7 +20,7 @@ class EnvConfig:
     truncation_reward: float = 0.0
     vp_reward: float = 0.0
     """Shaping: reward per public victory point gained (0 disables)."""
-    shaping: Literal["none", "own", "margin", "strategic", "strategic_v2"] = "none"
+    shaping: Literal["none", "own", "margin", "strategic", "strategic_v2", "strategic_v3"] = "none"
     """Potential-based shaping in `CatanEnv`: F = gamma * Phi(s') - Phi(s) between consecutive
     learner decisions, with Phi = 0 once the game is over, so the optimal policy is unchanged.
     own: Phi = shaping_coef * own VP (own hidden VP cards included); margin: Phi = shaping_coef *
@@ -29,7 +29,8 @@ class EnvConfig:
     and award progress. Opponent threat uses public VP, production, and award progress with
     public-VP softmax weights; no hidden opponent cards or learned beliefs are used.
     strategic_v2 uses production diversity and resource conservation in the learner utility,
-    and includes awards through victory points."""
+    and includes awards through victory points. strategic_v3 blends in opening placement quality
+    during setup and early turns, and limits road readiness to roads that open a settlement site."""
     shaping_coef: float = 0.1
     shaping_gamma: float = 0.999
     """Discount used by the shaping; must equal `ppo.gamma` to keep the optimal policy."""
@@ -65,6 +66,8 @@ class EnvConfig:
     v2_readiness_settlement_weight: float = 0.40
     v2_readiness_city_weight: float = 0.40
     v2_readiness_dev_weight: float = 0.10
+    v3_opening_blend: float = 0.50
+    v3_opening_taper_turns: int = 16
 
     def __post_init__(self) -> None:
         for names in (
@@ -104,10 +107,14 @@ class EnvConfig:
                 raise ValueError(f"{names}: weights must sum to one")
         if not math.isfinite(self.opponent_threat_coef) or self.opponent_threat_coef < 0:
             raise ValueError("opponent_threat_coef must be finite and nonnegative")
-        if self.shaping == "strategic_v2" and (
+        if self.shaping in ("strategic_v2", "strategic_v3") and (
             not math.isfinite(self.shaping_coef) or self.shaping_coef < 0
         ):
             raise ValueError("shaping_coef must be finite and nonnegative")
+        if not 0 <= self.v3_opening_blend <= 1:
+            raise ValueError("v3_opening_blend must be between zero and one")
+        if type(self.v3_opening_taper_turns) is not int or self.v3_opening_taper_turns <= 0:
+            raise ValueError("v3_opening_taper_turns must be a positive integer")
         for name in (
             "production_normalization",
             "opponent_softmax_temperature",
