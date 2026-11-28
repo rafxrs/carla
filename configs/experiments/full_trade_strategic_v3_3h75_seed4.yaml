@@ -1,0 +1,122 @@
+name: full_trade_strategic_v3_3h75_seed4
+seed: 4
+engine:
+  vp_to_win: 10
+  discard_limit: 7
+  max_turns: 500
+  allow_domestic_trade: true
+  max_trade_proposals_per_turn: 3
+  max_domestic_trades_per_turn: 3
+  max_trade_cards_per_side: 4
+  board_seed: null
+  forbid_adjacent_red_numbers: true
+env:
+  learner_seat: -1
+  win_reward: 1.0
+  loss_reward: -1.0
+  truncation_reward: 0.0
+  vp_reward: 0.0
+  shaping: strategic_v3
+  shaping_coef: 2.5
+  shaping_gamma: 0.999
+  max_events: 64
+  strategic_vp_weight: 0.5
+  strategic_production_weight: 0.3
+  strategic_readiness_weight: 0.15
+  strategic_award_weight: 0.05
+  readiness_road_weight: 0.1
+  readiness_settlement_weight: 0.4
+  readiness_city_weight: 0.4
+  readiness_dev_weight: 0.1
+  opponent_threat_coef: 0.35
+  opponent_vp_weight: 0.56
+  opponent_production_weight: 0.28
+  opponent_award_weight: 0.16
+  award_road_weight: 0.5
+  award_army_weight: 0.5
+  production_normalization: 2.0
+  opponent_softmax_temperature: 2.0
+  v2_vp_weight: 0.5
+  v2_production_weight: 0.35
+  v2_readiness_weight: 0.1
+  v2_resource_conservation_weight: 0.05
+  v2_production_quantity_weight: 0.7
+  v2_production_diversity_weight: 0.3
+  v2_resource_coverage_threshold: 0.08333333333333333
+  v2_resource_reserve_normalization: 7.0
+  v2_opponent_vp_weight: 0.6666666666666666
+  v2_opponent_production_weight: 0.3333333333333333
+  v2_readiness_road_weight: 0.1
+  v2_readiness_settlement_weight: 0.4
+  v2_readiness_city_weight: 0.4
+  v2_readiness_dev_weight: 0.1
+  v3_opening_blend: 0.50
+  v3_opening_taper_turns: 16
+model:
+  encoder: gnn
+  hidden_dim: 256
+  mlp_layers: 3
+  gnn_layers: 4
+  gnn_tile_nodes: true
+  set_attention: true
+  attention_heads: 4
+  belief: gru
+  belief_dim: 128
+  belief_loss_coef: 0.1
+  trade_decoder: gru
+  max_trade_cards_per_side: 4
+ppo:
+  total_env_steps: 250880
+  rollout_steps: 64
+  epochs: 4
+  minibatch_size: 4096
+  learning_rate: 0.0001
+  gamma: 0.999
+  gae_lambda: 0.95
+  clip_coef: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.01
+  max_grad_norm: 0.5
+  target_kl: null
+  max_policy_lag: 1
+  sequence_length: 32
+  trade_entropy_coef: 0.001
+opponents:
+  pool:
+  - kind: heuristic75
+    weight: 1.0
+    path: null
+  snapshot_every: 50
+  max_snapshots: 20
+eval:
+  agents:
+  - heuristic
+  - random
+  - random
+  - random
+  num_games: 200
+  seeds:
+  - 0
+  - 1
+  - 2
+  rotate_seats: true
+  confidence: 0.95
+  num_workers: 1
+  save_records: false
+  every_env_steps: 25000
+  boards: 50
+  opponents:
+  - heuristic
+  seed: 10000
+  deterministic: true
+  retain_checkpoints: true
+runtime:
+  num_workers: 4
+  envs_per_worker: 4
+  device: cuda
+  torch_threads_per_worker: 1
+  deterministic_torch: false
+  output_dir: local_evaluations/esp_v2_training
+  checkpoint_every: 50
+  log_every: 10
+  collect_training_diagnostics: true
